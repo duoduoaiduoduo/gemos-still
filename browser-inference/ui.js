@@ -61,3 +61,5 @@ window.addEventListener('beforeunload',e=>{if(busy){e.preventDefault();e.returnV
 for(const type of ['dragover','drop'])document.addEventListener(type,e=>e.preventDefault());document.addEventListener('drop',e=>{if(!busy){notice('请点击「新建记忆」检查设备后选择照片。');sidebar(true);}});
 const example=document.createElement('button');example.id='view-example';example.className='quiet';example.textContent='查看示例';$('library-section').before(example);example.onclick=async()=>{if(busy)return;try{const demo=await(await fetch('./memory.json?v=gallery-20260913-1')).json();try{demo.settings=JSON.parse(localStorage.getItem(`still-demo-settings-${demo.id}`))||demo.settings;}catch{}await show(demo);}catch(e){notice(e.message);sidebar(true);}};
 async function boot(){document.querySelector('.format-note').textContent='照片留在本机 · JPG / PNG / WebP';$('creation').hidden=false;await refresh();status('等待收藏 · 新建记忆或打开已有记忆');}boot().catch(e=>{notice(e.message);sidebar(true);});
+
+import('../mobile-ui.js?v=mobile-layout-1');
