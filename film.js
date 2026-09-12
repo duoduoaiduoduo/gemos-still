@@ -1,6 +1,6 @@
 import {memoryBox} from './main.js?v=gallery-20260913-1';
 import {drawFilmOutro} from './film-outro.js';
-import {createFilmScore} from './film-score.js';
+import {createFilmScore} from './film-score.js?v=piano-20260913-1';
 import {FILM,EXPORT_PRESETS,exportSettings} from './film-timeline.js';
 export const FILM_DURATION=FILM.duration;
 const ease=t=>{t=Math.max(0,Math.min(1,t));return t*t*(3-2*t);};
@@ -20,7 +20,7 @@ export function filmView(t){
 }
 const $=id=>document.getElementById(id);
 const button=document.createElement('button');button.textContent='制作展示影片 ↗';button.id='make-film';$('memory-actions').append(button);
-const dialog=document.createElement('dialog');dialog.className='local-generation';dialog.innerHTML=`<button id="film-close" class="dialog-close" aria-label="关闭影片制作">×</button><p class="eyebrow">GEMOS STILL / MOTION</p><h2>让记忆，成为影片。</h2><p>52 秒空间影片 · 收藏构筑、微距绕拍、九宫格作品墙与品牌片尾。</p><label>画幅 <select id="film-format"><option value="wide">横屏 16:9</option><option value="portrait">竖屏 9:16</option></select></label><label>画质 <select id="film-quality">${Object.entries(EXPORT_PRESETS).map(([id,p])=>`<option value="${id}" ${id==='1080p60'?'selected':''}>${p.label}</option>`).join('')}</select></label><label><input id="film-music" type="checkbox" checked> 同步配乐 · 电子氛围</label><p id="film-status" role="status">逐帧制作，照片无需上传。4K 与 60 帧需要更长时间，请保持页面打开。</p><canvas id="film-canvas" hidden style="width:100%;max-height:45vh;object-fit:contain"></canvas><video id="film-video" controls playsinline hidden style="width:100%;max-height:45vh"></video><button id="film-start" class="primary">生成展示影片</button><a id="film-save" hidden class="primary">保存视频 ↓</a><button id="film-cancel" hidden>取消渲染</button>`;document.body.append(dialog);
+const dialog=document.createElement('dialog');dialog.className='local-generation';dialog.innerHTML=`<button id="film-close" class="dialog-close" aria-label="关闭影片制作">×</button><p class="eyebrow">GEMOS STILL / MOTION</p><h2>让记忆，成为影片。</h2><p>52 秒空间影片 · 收藏构筑、微距绕拍、九宫格作品墙与品牌片尾。</p><label>画幅 <select id="film-format"><option value="wide">横屏 16:9</option><option value="portrait">竖屏 9:16</option></select></label><label>画质 <select id="film-quality">${Object.entries(EXPORT_PRESETS).map(([id,p])=>`<option value="${id}" ${id==='1080p60'?'selected':''}>${p.label}</option>`).join('')}</select></label><label><input id="film-music" type="checkbox" checked> 同步配乐 · 柔和钢琴</label><p id="film-status" role="status">逐帧制作，照片无需上传。4K 与 60 帧需要更长时间，请保持页面打开。</p><canvas id="film-canvas" hidden style="width:100%;max-height:45vh;object-fit:contain"></canvas><video id="film-video" controls playsinline hidden style="width:100%;max-height:45vh"></video><button id="film-start" class="primary">生成展示影片</button><a id="film-save" hidden class="primary">保存视频 ↓</a><button id="film-cancel" hidden>取消渲染</button>`;document.body.append(dialog);
 let running=false,controller=null,videoURL=null;
 button.onclick=()=>dialog.showModal();
 function close(){if(running){controller?.abort();return;}dialog.close();$('film-video').pause();}
