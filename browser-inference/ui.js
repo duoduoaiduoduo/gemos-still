@@ -1,6 +1,6 @@
 import {preparePhoto} from './photo.js?v=decode-1';
-import {memoryBox} from '../main.js?v=glass-progress-1';
-import {save,list,pack,unpack} from './library.js';
+import {memoryBox} from '../main.js?v=mobile-memory-1';
+import {save,list,get,draft,pack,unpack} from './library.js?v=mobile-memory-1';
 const $=id=>document.getElementById(id);let records=[],current=null,worker=null,busy=false,epoch=0,urls=[],operation=null,cancelJob=null;
 const progressPanel=document.createElement('section');progressPanel.hidden=true;progressPanel.id='generation-progress';progressPanel.setAttribute('aria-label','本机制作进度');progressPanel.innerHTML=`<div><strong>正在制作记忆</strong><button id="generation-cancel" type="button">取消</button></div><p id="generation-status" role="status">正在启动本机任务…</p><progress id="generation-bar" max="1" aria-label="模型下载进度"></progress><small id="generation-detail">照片留在本机</small><button id="generation-retry" hidden>重试制作</button>`;document.body.append(progressPanel);
 let retryPhoto=null;
@@ -10,7 +10,7 @@ function updateProgress(data){memoryBox.setGenerationProgress(data.phase==='down
 function notice(text=''){ $('notice').textContent=text;$('notice').hidden=!text;}
 function sidebar(open){document.body.classList.toggle('sidebar-open',open);$('toggle-sidebar').textContent=open?'关闭':'调整';$('toggle-sidebar').setAttribute('aria-expanded',String(open));$('close-sidebar').hidden=!open;}
 function lock(on){busy=on;$('library').disabled=on;$('replay-creation').disabled=on;$('choose-photo').textContent=on?'取消制作':'＋ 新建记忆';$('import-memory').disabled=on;$('view-example').disabled=on;}
-function stop(){progressPanel.hidden=true;retryPhoto=null;memoryBox.setComputing(false);epoch++;operation=null;cancelJob?.(Error('已取消'));cancelJob=null;worker?.terminate();worker=null;memoryBox.cancelCreation();lock(false);status('制作已取消 · 已有记忆保留');notice('制作已取消，已有记忆保留。');}
+function stop(){draft(null).catch(()=>{});memoryBox.setInferencePaused(false);progressPanel.hidden=true;retryPhoto=null;memoryBox.setComputing(false);epoch++;operation=null;cancelJob?.(Error('已取消'));cancelJob=null;worker?.terminate();worker=null;memoryBox.cancelCreation();lock(false);status('制作已取消 · 已有记忆保留');notice('制作已取消，已有记忆保留。');}
 function status(text){$('job-message').textContent=text;$('connection').textContent=text;}
 async function refresh(){try{records=await list();}catch{notice('浏览器存储不可用，生成后请立即导出记忆。');}const select=$('library');select.replaceChildren();const placeholder=new Option('选择一份记忆…','');select.append(placeholder);for(const r of records){const o=document.createElement('option');o.value=r.id;o.textContent=r.name;select.append(o);}$('library-section').hidden=!records.length;$('memory-count').textContent=records.length;if(current)select.value=current.id;}
 async function show(record,reveal=false){
@@ -36,21 +36,21 @@ async function create(file){
  let arrival;
  let runningWorker,watchdog;
  try{
- updateProgress({text:'正在读取照片…'});const prepared=await preparePhoto(file);if(operation!==op)return;
+ updateProgress({text:'正在读取照片…'});const prepared=await preparePhoto(file);if(operation!==op)return;try{await draft({photo:file,name:file.name,started_at:Date.now()});}catch{notice('无法保存制作草稿，页面关闭后需重新选择照片。');}if(operation!==op)return;
  arrival=Promise.resolve().then(()=>memoryBox.beginCreation(file,file.name.replace(/\.[^.]+$/,''))).then(()=>{arrived=true;if(token===epoch)memoryBox.waiting(lastStatus);});
  runningWorker=new Worker(new URL('./worker.js?v=decode-1',import.meta.url),{type:'module'});worker=runningWorker;
- const result=new Promise((resolve,reject)=>{cancelJob=reject;const arm=(ms,text)=>{clearTimeout(watchdog);watchdog=setTimeout(()=>reject(Error(text)),ms);};arm(30000,'本机任务没有启动响应，请更新浏览器并刷新重试');runningWorker.onmessage=({data})=>{if(token!==epoch)return;if(data.type==='status'){arm(['initializing','inference'].includes(data.phase)?300000:60000,'当前步骤长时间没有响应：'+data.text+'。请重试；若再次失败，请提供手机型号和浏览器。');lastStatus=data.text;updateProgress(data);status(data.text);if(arrived)memoryBox.waiting(data.text);}else if(data.type==='complete')resolve(data.buffer);else if(data.type==='error')reject(Error(data.text));};runningWorker.onerror=()=>reject(Error('浏览器未能完成推理，可能是内存不足或 GPU 不兼容。已有记忆仍可打开。'));});
+ const result=new Promise((resolve,reject)=>{cancelJob=reject;const arm=(ms,text)=>{clearTimeout(watchdog);watchdog=setTimeout(()=>reject(Error(text)),ms);};arm(30000,'本机任务没有启动响应，请更新浏览器并刷新重试');runningWorker.onmessage=({data})=>{if(token!==epoch)return;if(data.type==='status'){if(['initializing','inference','packing'].includes(data.phase))memoryBox.setInferencePaused(true);arm(['initializing','inference'].includes(data.phase)?300000:60000,'当前步骤长时间没有响应：'+data.text+'。请重试；若再次失败，请提供手机型号和浏览器。');lastStatus=data.text;updateProgress(data);status(data.text);if(arrived)memoryBox.waiting(data.text);}else if(data.type==='complete')resolve(data.buffer);else if(data.type==='error')reject(Error(data.text));};runningWorker.onerror=()=>reject(Error('浏览器未能完成推理，可能是内存不足或 GPU 不兼容。已有记忆仍可打开。'));});
  runningWorker.postMessage({prepared},[prepared.pixels.buffer]);
- const [buffer]=await Promise.all([result,arrival]);if(token!==epoch)return;
+ const [buffer]=await Promise.all([result,arrival]);runningWorker.terminate();worker=null;memoryBox.setInferencePaused(false);if(token!==epoch)return;
  const record={id:crypto.randomUUID(),name:file.name.replace(/\.[^.]+$/,'').slice(0,60)||'一段记忆',created_at:new Date().toISOString(),photo:file,model:buffer,settings:{designVersion:2,depthVolume:1}};
  try{await save(record);}catch{notice('本机存储不足，请立即导出这份记忆。');}
- progressPanel.hidden=true;retryPhoto=null;await refresh();await show(record,true);
+ await draft(null).catch(()=>{});progressPanel.hidden=true;retryPhoto=null;await refresh();await show(record,true);
  }catch(e){if(operation===op){memoryBox.cancelCreation();updateProgress({text:'制作未完成：'+e.message});progressPanel.querySelector('strong').textContent='制作已暂停';$('generation-bar').hidden=true;$('generation-detail').textContent='照片未上传 · 请根据上方原因重试';$('generation-retry').hidden=false;$('generation-cancel').textContent='关闭';notice('制作未完成：'+e.message);status('照片没有上传，可重试或换一台设备。');sidebar(true);}}
- finally{clearTimeout(watchdog);memoryBox.setComputing(false);runningWorker?.terminate();if(operation===op){operation=null;worker=null;cancelJob=null;lock(false);}}
+ finally{memoryBox.setInferencePaused(false);clearTimeout(watchdog);memoryBox.setComputing(false);runningWorker?.terminate();if(operation===op){operation=null;worker=null;cancelJob=null;lock(false);}}
 }
 $('choose-photo').onclick=()=>busy?stop():setup();$('photo-input').onchange=e=>{create(e.target.files[0]);e.target.value='';};
 const importButton=document.createElement('button');importButton.id='import-memory';importButton.textContent='打开记忆文件';importButton.className='quiet';$('creation').append(importButton);const input=document.createElement('input');input.type='file';input.accept='.still';input.hidden=true;document.body.append(input);importButton.onclick=()=>input.click();input.onchange=async()=>{try{const r=await unpack(input.files[0]);try{await save(r);}catch{notice('无法保存到浏览器，但仍可查看这份记忆。');}await refresh();await show(r);}catch(e){notice(e.message);sidebar(true);}input.value='';};
-$('library').onchange=async()=>{const r=records.find(r=>r.id===$('library').value);if(r)await show(r).catch(()=>{});};
+$('library').onchange=async()=>{try{const r=await get($('library').value);if(r)await show(r);}catch(e){notice(e.message);}};
 $('save-settings').onclick=async()=>{if(!current)return;try{current.settings=memoryBox.getSettings();if(current.model)await save(current);else localStorage.setItem(`still-demo-settings-${current.id}`, JSON.stringify(current.settings));notice('设置已保存在这台设备。');}catch(e){notice(e.message);}};
 function download(blob,name){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);}
 $('download-memory').textContent='导出记忆文件 ↓';$('download-memory').onclick=()=>{if(current?.model){current.settings=memoryBox.getSettings();download(pack(current),`${current.name.replace(/[\\/:*?"<>|]/g,'_')}.still`);}};
@@ -60,6 +60,6 @@ $('toggle-sidebar').onclick=()=>sidebar(!document.body.classList.contains('sideb
 window.addEventListener('beforeunload',e=>{if(busy){e.preventDefault();e.returnValue='';}});
 for(const type of ['dragover','drop'])document.addEventListener(type,e=>e.preventDefault());document.addEventListener('drop',e=>{if(!busy){notice('请点击「新建记忆」检查设备后选择照片。');sidebar(true);}});
 const example=document.createElement('button');example.id='view-example';example.className='quiet';example.textContent='查看示例';$('library-section').before(example);example.onclick=async()=>{if(busy)return;try{const demo=await(await fetch('./memory.json?v=gallery-20260913-1')).json();try{demo.settings=JSON.parse(localStorage.getItem(`still-demo-settings-${demo.id}`))||demo.settings;}catch{}await show(demo);}catch(e){notice(e.message);sidebar(true);}};
-async function boot(){document.querySelector('.format-note').textContent='照片留在本机 · JPG / PNG / WebP';$('creation').hidden=false;await refresh();status('等待收藏 · 新建记忆或打开已有记忆');}boot().catch(e=>{notice(e.message);sidebar(true);});
+async function boot(){document.querySelector('.format-note').textContent='照片留在本机 · JPG / PNG / WebP';$('creation').hidden=false;await refresh();status('等待收藏 · 新建记忆或打开已有记忆');const pending=await draft().catch(()=>null);if(pending?.photo){retryPhoto=new File([pending.photo],pending.name||'未完成的记忆.jpg',{type:pending.photo.type});updateProgress({text:'上次制作中断了，可能是页面关闭或手机资源不足。照片已保留，可手动重试。'});progressPanel.querySelector('strong').textContent='发现未完成的记忆';$('generation-bar').hidden=true;$('generation-retry').hidden=false;$('generation-cancel').textContent='关闭';}}boot().catch(e=>{notice(e.message);sidebar(true);});
 
 import('../mobile-ui.js?v=mobile-layout-1');
