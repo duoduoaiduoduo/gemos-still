@@ -1,3 +1,4 @@
+import {preparePhoto} from './photo.js?v=decode-1';
 import {memoryBox} from '../main.js?v=glass-progress-1';
 import {save,list,pack,unpack} from './library.js';
 const $=id=>document.getElementById(id);let records=[],current=null,worker=null,busy=false,epoch=0,urls=[],operation=null,cancelJob=null;
@@ -22,7 +23,7 @@ async function show(record,reveal=false){
 const dialog=document.createElement('dialog');dialog.className='local-generation';dialog.innerHTML=`<form method="dialog"><button class="dialog-close" aria-label="关闭制作说明">×</button></form><p class="eyebrow">MADE ON YOUR DEVICE</p><h2>在这里，留住一刻。</h2><p>照片与生成过程留在你的设备。首次需下载约 1.31 GB 模型，优先镜像线路，失败自动切换；之后优先使用本机缓存。</p><p id="gpu-status" role="status">正在检测设备…</p><button id="local-select" class="primary" disabled>选择照片并制作</button><button id="local-example" disabled>用示例风景试一试 ↗</button><small>请保持页面打开。生成会占用本机 GPU 和内存；关闭页面会停止制作。<br>本机保存可能被浏览器清理，重要记忆请导出备份。</small><details><summary>模型与缓存</summary><p>SHARP 的浏览器格式转换版本，用于非商业研究实验。<a href="./browser-inference/licenses/APPLE-SHARP.txt" target="_blank" rel="noopener">模型许可</a> · <a href="./browser-inference/licenses/NOTICE.txt" target="_blank" rel="noopener">来源与修改说明</a></p><button id="clear-model">清除本机模型缓存</button></details>`;document.body.append(dialog);
 async function probeWorker(){
  let probe,timer;
- try{await new Promise((resolve,reject)=>{timer=setTimeout(()=>reject(Error('这个浏览器的后台计算未响应。请用最新版 Chrome 打开同一网址再试；已有记忆仍可查看。')),15000);probe=new Worker(new URL('./worker.js?v=mirror-20260913-1',import.meta.url),{type:'module'});probe.onmessage=({data})=>{if(data.type==='probe-ready')resolve();else if(data.type==='error')reject(Error(data.text+'。请用最新版 Chrome 打开同一网址再试。'));};probe.onerror=()=>reject(Error('浏览器无法启动后台计算组件，请用最新版 Chrome 打开同一网址再试。'));probe.postMessage({type:'probe'});});}finally{clearTimeout(timer);probe?.terminate();}
+ try{await new Promise((resolve,reject)=>{timer=setTimeout(()=>reject(Error('这个浏览器的后台计算未响应。请用最新版 Chrome 打开同一网址再试；已有记忆仍可查看。')),15000);probe=new Worker(new URL('./worker.js?v=decode-1',import.meta.url),{type:'module'});probe.onmessage=({data})=>{if(data.type==='probe-ready')resolve();else if(data.type==='error')reject(Error(data.text+'。请用最新版 Chrome 打开同一网址再试。'));};probe.onerror=()=>reject(Error('浏览器无法启动后台计算组件，请用最新版 Chrome 打开同一网址再试。'));probe.postMessage({type:'probe'});});}finally{clearTimeout(timer);probe?.terminate();}
 }
 async function setup(){dialog.showModal();$('local-select').disabled=$('local-example').disabled=true;try{const a=await Promise.race([navigator.gpu?.requestAdapter({powerPreference:'high-performance'}),new Promise((_,reject)=>setTimeout(()=>reject(Error('GPU 检测超时，请更新浏览器后重试。')),15000))]);if(!a?.features.has('shader-f16'))throw Error('当前设备不支持所需的 WebGPU 半精度计算。请更新支持 WebGPU 的浏览器；你仍可查看示例、打开记忆文件。');$('gpu-status').textContent='正在检测浏览器后台计算…';await probeWorker();$('gpu-status').textContent=matchMedia('(pointer:coarse)').matches?'手机 GPU 检测通过 · 本机生成试运行，内存不足时可能无法完成':'设备支持 · 使用你自己的 GPU';$('local-select').disabled=$('local-example').disabled=false;}catch(e){$('gpu-status').textContent=e.message;}}
 $('local-select').onclick=()=>$('photo-input').click();
@@ -32,17 +33,19 @@ async function create(file){
  if(busy)return;if(!file||!['image/jpeg','image/png','image/webp'].includes(file.type)){notice('请选择 JPG、PNG 或 WebP 照片');return;}if(file.size>25*1024*1024){notice('照片不能超过 25 MB');return;}
  dialog.close();notice();sidebar(false);lock(true);retryPhoto=file;progressPanel.querySelector('strong').textContent='正在制作记忆';$('generation-bar').hidden=false;$('generation-retry').hidden=true;$('generation-cancel').textContent='取消';updateProgress({text:'正在启动本机任务…'});memoryBox.setComputing(true);const token=++epoch,op={};operation=op;
  let arrived=false,lastStatus='正在准备本机模型';
- const arrival=memoryBox.beginCreation(file,file.name.replace(/\.[^.]+$/,'')).then(()=>{arrived=true;if(token===epoch)memoryBox.waiting(lastStatus);});
+ let arrival;
  let runningWorker,watchdog;
  try{
- runningWorker=new Worker(new URL('./worker.js?v=mirror-20260913-1',import.meta.url),{type:'module'});worker=runningWorker;
+ updateProgress({text:'正在读取照片…'});const prepared=await preparePhoto(file);if(operation!==op)return;
+ arrival=Promise.resolve().then(()=>memoryBox.beginCreation(file,file.name.replace(/\.[^.]+$/,''))).then(()=>{arrived=true;if(token===epoch)memoryBox.waiting(lastStatus);});
+ runningWorker=new Worker(new URL('./worker.js?v=decode-1',import.meta.url),{type:'module'});worker=runningWorker;
  const result=new Promise((resolve,reject)=>{cancelJob=reject;const arm=(ms,text)=>{clearTimeout(watchdog);watchdog=setTimeout(()=>reject(Error(text)),ms);};arm(30000,'本机任务没有启动响应，请更新浏览器并刷新重试');runningWorker.onmessage=({data})=>{if(token!==epoch)return;if(data.type==='status'){arm(['initializing','inference'].includes(data.phase)?300000:60000,'当前步骤长时间没有响应：'+data.text+'。请重试；若再次失败，请提供手机型号和浏览器。');lastStatus=data.text;updateProgress(data);status(data.text);if(arrived)memoryBox.waiting(data.text);}else if(data.type==='complete')resolve(data.buffer);else if(data.type==='error')reject(Error(data.text));};runningWorker.onerror=()=>reject(Error('浏览器未能完成推理，可能是内存不足或 GPU 不兼容。已有记忆仍可打开。'));});
- runningWorker.postMessage({photo:file});
+ runningWorker.postMessage({prepared},[prepared.pixels.buffer]);
  const [buffer]=await Promise.all([result,arrival]);if(token!==epoch)return;
  const record={id:crypto.randomUUID(),name:file.name.replace(/\.[^.]+$/,'').slice(0,60)||'一段记忆',created_at:new Date().toISOString(),photo:file,model:buffer,settings:{designVersion:2,depthVolume:1}};
  try{await save(record);}catch{notice('本机存储不足，请立即导出这份记忆。');}
  progressPanel.hidden=true;retryPhoto=null;await refresh();await show(record,true);
- }catch(e){if(operation===op){memoryBox.cancelCreation();updateProgress({text:'制作未完成：'+e.message});progressPanel.querySelector('strong').textContent='制作已暂停';$('generation-bar').hidden=true;$('generation-detail').textContent='照片未上传 · 切换网络后可重试';$('generation-retry').hidden=false;$('generation-cancel').textContent='关闭';notice('制作未完成：'+e.message);status('照片没有上传，可重试或换一台设备。');sidebar(true);}}
+ }catch(e){if(operation===op){memoryBox.cancelCreation();updateProgress({text:'制作未完成：'+e.message});progressPanel.querySelector('strong').textContent='制作已暂停';$('generation-bar').hidden=true;$('generation-detail').textContent='照片未上传 · 请根据上方原因重试';$('generation-retry').hidden=false;$('generation-cancel').textContent='关闭';notice('制作未完成：'+e.message);status('照片没有上传，可重试或换一台设备。');sidebar(true);}}
  finally{clearTimeout(watchdog);memoryBox.setComputing(false);runningWorker?.terminate();if(operation===op){operation=null;worker=null;cancelJob=null;lock(false);}}
 }
 $('choose-photo').onclick=()=>busy?stop():setup();$('photo-input').onchange=e=>{create(e.target.files[0]);e.target.value='';};

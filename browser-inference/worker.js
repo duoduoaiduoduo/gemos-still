@@ -26,12 +26,11 @@ self.onmessage=async({data})=>{
  if(busy)return;busy=true;status('本机任务已启动');
  try{
  if(data.type==='probe'){const adapter=await bounded(navigator.gpu?.requestAdapter({powerPreference:'high-performance'}),10000,'后台 GPU 检测超时');if(!adapter?.features.has('shader-f16'))throw Error('浏览器后台不支持所需 GPU 计算');postMessage({type:'probe-ready'});return;}
+ const {width,height}=data.prepared||{};let pixels=data.prepared?.pixels;
+ if(!width||!height||pixels?.length!==1536*1536*4)throw Error('图片预处理未完成，请重新选择照片。');
  const s=await load();
  status('正在用你的 GPU 重建照片空间','inference');
- const bitmap=await createImageBitmap(data.photo),width=bitmap.width,height=bitmap.height;
- if(width*height>40000000){bitmap.close();throw Error('请选择小于 4000 万像素的照片');}
- const canvas=new OffscreenCanvas(1536,1536),ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.fillStyle='#fff';ctx.fillRect(0,0,1536,1536);ctx.drawImage(bitmap,0,0,1536,1536);bitmap.close();
- let pixels=ctx.getImageData(0,0,1536,1536).data;const N=1536*1536,isHalf=s.inputMetadata[0].type==='float16',a=isHalf?new Uint16Array(N*3):new Float32Array(N*3),lut=isHalf?half(Float32Array.from({length:256},(_,i)=>i/255)):null;for(let i=0;i<N;i++)for(let c=0;c<3;c++)a[c*N+i]=isHalf?lut[pixels[i*4+c]]:pixels[i*4+c]/255;pixels=null;canvas.width=canvas.height=1;
+ const N=1536*1536,isHalf=s.inputMetadata[0].type==='float16',a=isHalf?new Uint16Array(N*3):new Float32Array(N*3),lut=isHalf?half(Float32Array.from({length:256},(_,i)=>i/255)):null;for(let i=0;i<N;i++)for(let c=0;c<3;c++)a[c*N+i]=isHalf?lut[pixels[i*4+c]]:pixels[i*4+c]/255;pixels=null;data.prepared=null;
  const focal=30*Math.hypot(width,height)/Math.hypot(36,24),feeds={};
  for(const [idx,values,dims]of [[0,a,[1,3,1536,1536]],[1,new Float32Array([focal/width]),[1]]]){const type=s.inputMetadata[idx].type;feeds[s.inputNames[idx]]=new ort.Tensor(type,type==='float16'&&!(values instanceof Uint16Array)?half(values):values,dims);}
  let outputs;try{outputs=await s.run(feeds);}finally{Object.values(feeds).forEach(t=>t.dispose());}
