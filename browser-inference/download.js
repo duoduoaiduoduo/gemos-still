@@ -9,7 +9,11 @@ export async function modelFile(config,name,size,{offset=0,total=size,report=()=
  emit('正在连接模型源，请稍候…');
  const controller=new AbortController();let reader,writer;
  try{
- const response=await bounded(fetch(config.base+name,{signal:controller.signal}),networkMs,'连接模型源超时，请检查网络后重试。照片未上传。');
+ let response;
+ for(let attempt=0;attempt<2;attempt++){
+  try{const url=new URL(config.base+name);if(attempt)url.searchParams.set('retry',String(Date.now()));response=await bounded(fetch(url.href,{signal:controller.signal,cache:'no-store'}),networkMs,'连接模型源超时，请检查网络后重试。照片未上传。');break;}
+  catch(e){if(attempt||!(e instanceof TypeError))throw e;emit('模型源连接失败，正在重新连接…');}
+ }
  if(!response.ok)throw Error(`模型源返回 ${response.status}，请稍后重试。`);
  if(!response.body)throw Error('浏览器不支持流式下载，请换用新版 Chrome。');
  reader=response.body.getReader();
@@ -24,5 +28,5 @@ export async function modelFile(config,name,size,{offset=0,total=size,report=()=
  if(loaded!==size)throw Error('模型下载不完整，请重试。');
  if(writer){await bounded(writer.close(),15000,'模型缓存保存超时');writer=null;emit('下载完成，正在读取模型…',size);const file=await bounded(handle.getFile(),cacheMs,'模型缓存读取超时');return new Uint8Array(await bounded(file.arrayBuffer(),30000,'模型缓存读取超时'));}
  emit('模型文件下载完成',size);return data;
- }catch(e){controller.abort();reader?.cancel().catch(()=>{});if(writer)writer.abort().catch(()=>{});throw e;}
+ }catch(e){controller.abort();reader?.cancel().catch(()=>{});if(writer)writer.abort().catch(()=>{});if(e instanceof TypeError)throw Error('无法下载模型文件（'+name+'）。当前网络无法连接 Hugging Face 或其下载节点；请切换网络后重试。照片未上传。');throw e;}
 }

@@ -14,3 +14,5 @@ await assert.rejects(modelFile(config,'x',4,{cacheMs:5,stallMs:5}),/长时间无
 globalThis.fetch=async()=>new Response(new Uint8Array([1]));
 await assert.rejects(modelFile(config,'x',4,{cacheMs:5}),/不完整/);
 console.log('PASS: cache timeout fallback, byte progress, connection timeout, stalled stream, truncated model');
+
+let attempts=0;globalThis.fetch=async()=>{attempts++;throw new TypeError('Failed to fetch');};await assert.rejects(modelFile(config,'x',4,{cacheMs:5}),/Hugging Face/);assert.equal(attempts,2);console.log('PASS: failed fetch retry and actionable error');

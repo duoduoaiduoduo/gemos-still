@@ -1,8 +1,9 @@
-import {bounded,modelFile} from './download.js?v=download-20260913-1';
+import {bounded,modelFile} from './download.js?v=network-20260913-2';
 let ort;
 import {prepare,half} from './prepare.js';
 let session=null,busy=false;
-const status=(text,phase='loading')=>postMessage({type:'status',text,phase});
+let lastStep='启动本机任务';
+const status=(text,phase='loading')=>{lastStep=text;postMessage({type:'status',text,phase});};
 async function load(){
  if(session)return session;
  status('正在检测后台 GPU 支持');
@@ -38,5 +39,5 @@ self.onmessage=async({data})=>{
  status('正在整理粒子、构图和空间层次','packing');
  let buffer;try{buffer=prepare(outputs,width,height,focal);}finally{Object.values(outputs).forEach(t=>t.dispose());}
  postMessage({type:'complete',buffer},[buffer]);
- }catch(e){postMessage({type:'error',text:String(e.message||e)});}finally{busy=false;}
+ }catch(e){postMessage({type:'error',text:e instanceof TypeError?lastStep+'失败：网络请求未完成，请切换网络并刷新后重试。照片未上传。':String(e.message||e)});}finally{busy=false;}
 };
