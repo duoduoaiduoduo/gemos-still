@@ -7,7 +7,7 @@ import { MemoryGaussians } from './gaussian.js?v=gallery-20260913-1';
 import { applyBakedLighting } from './baked-lighting.js?v=gallery-20260913-1';
 import { buildComputer } from './computer.js?v=gallery-20260913-1';
 import { addLogoSticker } from './logo-sticker.js';
-import { createCeremony } from './ceremony.js';
+import { createCeremony } from './ceremony.js?v=glass-progress-1';
 import { createStudio } from './studio.js';
 import { EffectComposer } from './vendor/addons/postprocessing/EffectComposer.js';
 import { GTAOPass } from './vendor/addons/postprocessing/GTAOPass.js';
@@ -213,6 +213,7 @@ export const memoryBox={
  camera.fov=THREE.MathUtils.lerp(view.fov??29,27,macro);camera.zoom=THREE.MathUtils.lerp(view.zoom,1,macro);camera.updateProjectionMatrix();
  if(t>=8&&!filmRevealed){filmRevealed=true;memoryMesh.visible=true;ceremony.reveal(memoryMesh,filmStart+8000);}ceremony.update(filmStart+t*1000);const focusPoint=new THREE.Vector3(0,.65+(view.lift??0),-.35).lerp(macroTarget,macro),forward=camera.getWorldDirection(new THREE.Vector3());filmDof.uniforms.focus.value=focusPoint.sub(camera.position).dot(forward);filmDof.uniforms.aperture.value=.00065*THREE.MathUtils.smoothstep(t,7,9)*(1-THREE.MathUtils.smoothstep(t,16,20));renderScene();return renderer.domElement;},
  endFilm(){if(!filmSaved)return;deskField.reset();if(filmSaved.bounds)modelBounds.copy(filmSaved.bounds);({azimuth,elevation,zoom,time}=filmSaved);camera.fov=filmSaved.fov;if(filmDof){composer.removePass(filmDof);filmDof.dispose();filmDof=null;}ceremony.cancel();memoryMesh.visible=true;tideAlpha=0;filmSaved=null;filming=false;resize();},
+ setGenerationProgress(value){ceremony.setProgress(value);},
  setComputing(value){computing=!!value;resize();},
  async beginCreation(file,name){loadVersion++;if(memoryMesh)memoryMesh.visible=false;demo.visible=false;try{await ceremony.begin(file,name);}catch(e){this.cancelCreation();throw e;}},
  waiting(message){if(memoryMesh)memoryMesh.visible=false;demo.visible=false;ceremony.wait(message);},

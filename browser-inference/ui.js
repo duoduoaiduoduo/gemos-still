@@ -1,11 +1,11 @@
-import {memoryBox} from '../main.js?v=gallery-20260913-1';
+import {memoryBox} from '../main.js?v=glass-progress-1';
 import {save,list,pack,unpack} from './library.js';
 const $=id=>document.getElementById(id);let records=[],current=null,worker=null,busy=false,epoch=0,urls=[],operation=null,cancelJob=null;
 const progressPanel=document.createElement('section');progressPanel.hidden=true;progressPanel.id='generation-progress';progressPanel.setAttribute('aria-label','本机制作进度');progressPanel.innerHTML=`<div><strong>正在制作记忆</strong><button id="generation-cancel" type="button">取消</button></div><p id="generation-status" role="status">正在启动本机任务…</p><progress id="generation-bar" max="1" aria-label="模型下载进度"></progress><small id="generation-detail">照片留在本机</small><button id="generation-retry" hidden>重试制作</button>`;document.body.append(progressPanel);
 let retryPhoto=null;
 $('generation-cancel').onclick=()=>{if(busy)stop();else progressPanel.hidden=true;};
 $('generation-retry').onclick=()=>{if(retryPhoto)create(retryPhoto);};
-function updateProgress(data){progressPanel.hidden=false;$('generation-status').textContent=data.text;const bar=$('generation-bar');if(data.phase==='download'&&Number.isFinite(data.total)&&data.total>0){bar.value=Math.min(1,data.loaded/data.total);$('generation-detail').textContent=`${Math.floor(bar.value*100)}% · ${(data.loaded/1048576).toFixed(1)} / ${(data.total/1048576).toFixed(1)} MB · 照片未上传`;}else{bar.removeAttribute('value');$('generation-detail').textContent='照片留在本机 · 请保持页面打开';}}
+function updateProgress(data){memoryBox.setGenerationProgress(data.phase==='download'&&data.total>0?data.loaded/data.total:null);progressPanel.hidden=false;$('generation-status').textContent=data.text;const bar=$('generation-bar');if(data.phase==='download'&&Number.isFinite(data.total)&&data.total>0){bar.value=Math.min(1,data.loaded/data.total);$('generation-detail').textContent=`${Math.floor(bar.value*100)}% · ${(data.loaded/1048576).toFixed(1)} / ${(data.total/1048576).toFixed(1)} MB · 照片未上传`;}else{bar.removeAttribute('value');$('generation-detail').textContent='照片留在本机 · 请保持页面打开';}}
 function notice(text=''){ $('notice').textContent=text;$('notice').hidden=!text;}
 function sidebar(open){document.body.classList.toggle('sidebar-open',open);$('toggle-sidebar').textContent=open?'关闭':'调整';$('toggle-sidebar').setAttribute('aria-expanded',String(open));$('close-sidebar').hidden=!open;}
 function lock(on){busy=on;$('library').disabled=on;$('replay-creation').disabled=on;$('choose-photo').textContent=on?'取消制作':'＋ 新建记忆';$('import-memory').disabled=on;$('view-example').disabled=on;}

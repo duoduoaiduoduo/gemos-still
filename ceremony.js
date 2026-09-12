@@ -6,9 +6,11 @@ export function createCeremony(scene,inside,camera,stage,driveSlot){
  let card=null,start=0,resolveArrival=null,epoch=0,active=false,phase='idle',revealStart=0,revealing=null,fadeTarget=0,previousTime=0;
  const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
  const label=document.createElement('div');label.className='ceremony-status';label.setAttribute('role','status');label.setAttribute('aria-live','polite');label.hidden=true;stage.append(label);
- const mat=new THREE.ShaderMaterial({transparent:true,depthWrite:false,uniforms:{time:{value:0},fade:{value:0}},vertexShader:`varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,fragmentShader:`varying vec2 vUv;uniform float time,fade;
- void main(){vec2 p=(vUv-.5)*vec2(1.12,1.);float d=length(p);float ring=exp(-pow((d-.18-.012*sin(time*1.4))*150.,2.));float angle=atan(p.y,p.x);float arc=.25+.75*pow(.5+.5*cos(angle-time*1.3),5.);float dots=pow(max(0.,sin(vUv.x*110.)*sin(vUv.y*110.)),18.);float wave=exp(-pow((vUv.y-.4-.055*sin(vUv.x*7.+time))*28.,2.));vec3 c=vec3(.82,.73,.53)*(ring*arc*.8+dots*wave*.22);float edge=smoothstep(0.,.09,vUv.x)*smoothstep(0.,.09,1.-vUv.x)*smoothstep(0.,.09,vUv.y)*smoothstep(0.,.09,1.-vUv.y);gl_FragColor=vec4(c,edge*fade);}`});
- const waiting=new THREE.Mesh(new THREE.PlaneGeometry(3.04,2.68),mat);waiting.position.set(0,.84,.25);waiting.visible=false;inside.add(waiting);
+ let progress=-1;
+ const mat=new THREE.ShaderMaterial({transparent:true,depthWrite:false,toneMapped:false,uniforms:{time:{value:0},fade:{value:0},progress:{value:-1}},vertexShader:`varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,fragmentShader:`varying vec2 vUv;uniform float time,fade,progress;
+ void main(){float edge=1.-smoothstep(.30,.48,abs(vUv.y-.5));float fill=progress<0.?exp(-pow((vUv.x-(.5+.36*sin(time*1.4)))*9.,2.)):1.-smoothstep(progress,progress+max(fwidth(vUv.x),.002),vUv.x);gl_FragColor=vec4(vec3(.94,.96,.89),fade*edge*(.18+.7*fill));}`});
+ const waiting=new THREE.Mesh(new THREE.PlaneGeometry(1.85,.026),mat);waiting.name='glass-generation-progress';waiting.position.set(0,-.34,.73);waiting.visible=false;waiting.renderOrder=20;scene.add(waiting);
+ function setProgress(value){progress=Number.isFinite(value)?THREE.MathUtils.clamp(value,0,1):-1;}
  const initial=new THREE.Vector3(),initialQ=new THREE.Quaternion(),slotQ=new THREE.Quaternion();
  const slotPoint=new THREE.Vector3(),slotNormal=new THREE.Vector3(),slotRotation=new THREE.Quaternion();
  const cardWidth=.71,halfLength=cardWidth*1.24/2;
@@ -17,7 +19,7 @@ export function createCeremony(scene,inside,camera,stage,driveSlot){
  let initialScale=1;
  function disposeCard(){if(card){scene.remove(card);card.geometry.dispose();card.material.map.dispose();card.material.dispose();card=null;}}
  function state(value,text){if(phase===value&&label.textContent===text)return;phase=value;stage.dataset.creation=value;label.textContent=text;label.hidden=!text;}
- function cancel(){epoch++;active=false;fadeTarget=0;disposeCard();if(revealing)revealing.material.uniforms.reveal.value=1;revealing=null;resolveArrival?.();resolveArrival=null;state('idle','');}
+ function cancel(){epoch++;active=false;fadeTarget=0;progress=-1;disposeCard();if(revealing)revealing.material.uniforms.reveal.value=1;revealing=null;resolveArrival?.();resolveArrival=null;state('idle','');}
  function wait(text='正在重建这一刻'){active=true;fadeTarget=1;state('generating',text);}
  async function begin(file,name,onReady){
   cancel();alignSlot();const ticket=epoch;active=true;state('card','将这一刻，装入记忆');const url=URL.createObjectURL(file);
@@ -43,7 +45,8 @@ export function createCeremony(scene,inside,camera,stage,driveSlot){
  function update(now){
   const dt=previousTime?Math.min((now-previousTime)/1000,.1):0;previousTime=now;
   mat.uniforms.fade.value=THREE.MathUtils.damp(mat.uniforms.fade.value,fadeTarget,4.5,dt);
-  waiting.visible=false; // The particle tank is the loading visual.
+  waiting.visible=mat.uniforms.fade.value>.005;
+  mat.uniforms.progress.value=progress;
   mat.uniforms.time.value=reduced?0:now/1000;
   if(card){const t=(now-start)/1000,hold=reduced?.3:2.4,travel=reduced?.25:1.65,approach=reduced?.2:.65,insert=reduced?.25:1.25;
    if(t<hold){camera.updateMatrixWorld();initial.set(0,0,-4).applyMatrix4(camera.matrixWorld);initialQ.copy(camera.quaternion);card.position.copy(initial);card.quaternion.copy(initialQ);card.scale.setScalar(initialScale*(.92+.08*smooth(t/.65)));}
@@ -53,5 +56,5 @@ export function createCeremony(scene,inside,camera,stage,driveSlot){
   }
   if(revealing){const p=Math.min(1,(now-revealStart)/(reduced?350:5200));revealing.material.uniforms.reveal.value=p;if(p===1){revealing=null;active=false;fadeTarget=0;state('complete','这一刻，已收藏');setTimeout(()=>{if(phase==='complete')state('idle','');},2400);}}
  }
- return {begin,cancel,wait,reveal,update,get active(){return active;},get phase(){return phase;}};
+ return {begin,cancel,wait,reveal,update,setProgress,get active(){return active;},get phase(){return phase;}};
 }
