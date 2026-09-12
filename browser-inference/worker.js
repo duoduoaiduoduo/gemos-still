@@ -1,23 +1,8 @@
+import {bounded,modelFile} from './download.js?v=download-20260913-1';
 let ort;
 import {prepare,half} from './prepare.js';
 let session=null,busy=false;
 const status=(text,phase='loading')=>postMessage({type:'status',text,phase});
-async function bounded(p,ms,message){let timer;try{return await Promise.race([p,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(message)),ms);})]);}finally{clearTimeout(timer);}}
-async function modelFile(config,name,size){
- status('正在检查本机模型缓存');
- let dir,handle;
- try{dir=await (await navigator.storage.getDirectory()).getDirectoryHandle('still-sharp-'+config.revision,{create:true});handle=await dir.getFileHandle(name,{create:true});const f=await handle.getFile();if(size&&f.size===size){status('正在读取已缓存模型');return new Uint8Array(await f.arrayBuffer());}}catch{}
- status('正在连接模型下载源（首次约 1.31 GB）');
- const controller=new AbortController();let stall=setTimeout(()=>controller.abort(),30000);
- let response;try{response=await fetch(config.base+name,{signal:controller.signal});}catch{throw Error('无法连接模型下载源，请检查网络后重试。照片未上传。');}finally{clearTimeout(stall);}
- if(!response.ok)throw Error('模型下载失败，请检查网络后重试');
- const expected=size||Number(response.headers.get('content-length')),reader=response.body.getReader();let loaded=0,last=0,writer;
- if(handle)try{writer=await handle.createWritable();}catch{}
- let data=writer?null:new Uint8Array(expected);
- try{while(true){stall=setTimeout(()=>controller.abort(),45000);let chunk;try{chunk=await reader.read();}catch{throw Error('模型下载已中断或长时间无响应，请检查网络后重试。');}finally{clearTimeout(stall);}const {value,done}=chunk;if(done)break;if(writer)await writer.write(value);else data.set(value,loaded);loaded+=value.length;if(performance.now()-last>250){status(`下载模型 ${Math.round(loaded/1048576)} / ${Math.round(expected/1048576)} MB`);last=performance.now();}}
- if(loaded!==expected)throw Error('模型下载不完整，请重试');if(writer){await writer.close();return new Uint8Array(await (await handle.getFile()).arrayBuffer());}return data;
- }catch(e){await writer?.abort().catch(()=>{});throw e;}
-}
 async function load(){
  if(session)return session;
  status('正在检测后台 GPU 支持');
@@ -25,7 +10,9 @@ async function load(){
  if(!adapter?.features.has('shader-f16'))throw Error('这台设备不支持所需的 WebGPU 半精度计算，请更新支持 WebGPU 的浏览器');
  status('正在读取模型配置');
  const config=await bounded(fetch(new URL('./model.json',import.meta.url)).then(r=>{if(!r.ok)throw Error('模型配置加载失败');return r.json();}),20000,'模型配置加载超时，请检查网络');
- const graph=await modelFile(config,config.graph,config.graphBytes),weights=await modelFile(config,config.weights,config.weightsBytes);
+ const total=config.graphBytes+config.weightsBytes;
+ const graph=await modelFile(config,config.graph,config.graphBytes,{total,report:postMessage.bind(self)});
+ const weights=await modelFile(config,config.weights,config.weightsBytes,{offset:config.graphBytes,total,report:postMessage.bind(self)});
  status('正在加载本机推理组件');
  ort=await bounded(import('./ort/ort.webgpu.min.js'),30000,'推理组件加载超时，请刷新页面后重试');
  ort.env.wasm.numThreads=1;
