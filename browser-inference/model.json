@@ -1,1 +1,19 @@
-{"revision": "1a426c9ac9394d2490ad4c78f8422c42771042a1", "base": "https://huggingface.co/sentiantai/sharp-onnx-webgpu-weights/resolve/1a426c9ac9394d2490ad4c78f8422c42771042a1/", "graph": "sharp_web_predictor_fp16.onnx", "weights": "sharp_web_predictor_fp16.onnx.data", "weightsBytes": 1308098560, "resolution": 1536, "graphBytes": 7211332}
+{
+  "revision": "1a426c9ac9394d2490ad4c78f8422c42771042a1",
+  "base": "https://huggingface.co/sentiantai/sharp-onnx-webgpu-weights/resolve/1a426c9ac9394d2490ad4c78f8422c42771042a1/",
+  "graph": "sharp_web_predictor_fp16.onnx",
+  "weights": "sharp_web_predictor_fp16.onnx.data",
+  "weightsBytes": 1308098560,
+  "resolution": 1536,
+  "graphBytes": 7211332,
+  "sources": [
+    {
+      "name": "镜像线路",
+      "base": "https://hf-mirror.net/sentiantai/sharp-onnx-webgpu-weights/resolve/1a426c9ac9394d2490ad4c78f8422c42771042a1/"
+    },
+    {
+      "name": "原始线路",
+      "base": "https://huggingface.co/sentiantai/sharp-onnx-webgpu-weights/resolve/1a426c9ac9394d2490ad4c78f8422c42771042a1/"
+    }
+  ]
+}

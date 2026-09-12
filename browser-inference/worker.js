@@ -1,4 +1,4 @@
-import {bounded,modelFile} from './download.js?v=network-20260913-2';
+import {bounded,modelFile} from './download.js?v=mirror-20260913-1';
 let ort;
 import {prepare,half} from './prepare.js';
 let session=null,busy=false;
@@ -10,7 +10,7 @@ async function load(){
  const adapter=await bounded(navigator.gpu?.requestAdapter({powerPreference:'high-performance'}),15000,'手机浏览器后台 GPU 检测超时，请更新浏览器后重试');
  if(!adapter?.features.has('shader-f16'))throw Error('这台设备不支持所需的 WebGPU 半精度计算，请更新支持 WebGPU 的浏览器');
  status('正在读取模型配置');
- const config=await bounded(fetch(new URL('./model.json',import.meta.url)).then(r=>{if(!r.ok)throw Error('模型配置加载失败');return r.json();}),20000,'模型配置加载超时，请检查网络');
+ const config=await bounded(fetch(new URL('./model.json?v=mirror-20260913-1',import.meta.url)).then(r=>{if(!r.ok)throw Error('模型配置加载失败');return r.json();}),20000,'模型配置加载超时，请检查网络');
  const total=config.graphBytes+config.weightsBytes;
  const graph=await modelFile(config,config.graph,config.graphBytes,{total,report:postMessage.bind(self)});
  const weights=await modelFile(config,config.weights,config.weightsBytes,{offset:config.graphBytes,total,report:postMessage.bind(self)});

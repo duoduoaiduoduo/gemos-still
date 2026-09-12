@@ -1,6 +1,6 @@
 // Byte-based progress across both ONNX files; storage is optional, never a prerequisite.
 export async function bounded(p,ms,message){let timer;try{return await Promise.race([p,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(message)),ms);})]);}finally{clearTimeout(timer);}}
-export async function modelFile(config,name,size,{offset=0,total=size,report=()=>{},cacheMs=8000,networkMs=30000,stallMs=45000}={}){
+async function downloadFile(config,name,size,{offset=0,total=size,report=()=>{},cacheMs=8000,networkMs=30000,stallMs=45000}={}){
  const emit=(text,loaded=0)=>report({type:'status',phase:'download',text,loaded:offset+loaded,total});
  emit('正在检查本机模型缓存…');
  let handle;
@@ -28,5 +28,17 @@ export async function modelFile(config,name,size,{offset=0,total=size,report=()=
  if(loaded!==size)throw Error('模型下载不完整，请重试。');
  if(writer){await bounded(writer.close(),15000,'模型缓存保存超时');writer=null;emit('下载完成，正在读取模型…',size);const file=await bounded(handle.getFile(),cacheMs,'模型缓存读取超时');return new Uint8Array(await bounded(file.arrayBuffer(),30000,'模型缓存读取超时'));}
  emit('模型文件下载完成',size);return data;
- }catch(e){controller.abort();reader?.cancel().catch(()=>{});if(writer)writer.abort().catch(()=>{});if(e instanceof TypeError)throw Error('无法下载模型文件（'+name+'）。当前网络无法连接 Hugging Face 或其下载节点；请切换网络后重试。照片未上传。');throw e;}
+ }catch(e){controller.abort();reader?.cancel().catch(()=>{});if(writer)writer.abort().catch(()=>{});if(e instanceof TypeError)throw Error('无法下载模型文件（'+name+'）。当前网络无法连接模型下载节点；请切换网络后重试。照片未上传。');throw e;}
+}
+
+export async function modelFile(config,name,size,options={}){
+ const sources=config.sources?.length?config.sources:[{name:'原始线路',base:config.base}];
+ let last;
+ for(let i=0;i<sources.length;i++){
+  const source=sources[i];
+  const report=data=>options.report?.({...data,text:source.name+' · '+data.text});
+  try{return await downloadFile({...config,base:source.base},name,size,{...options,report});}
+  catch(e){last=e;if(i+1<sources.length)report({type:'status',phase:'download',text:'连接未完成，正在切换下载线路…',loaded:options.offset||0,total:options.total||size});}
+ }
+ throw Error('模型下载线路均未完成。'+last.message);
 }

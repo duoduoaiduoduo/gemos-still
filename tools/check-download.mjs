@@ -15,4 +15,8 @@ globalThis.fetch=async()=>new Response(new Uint8Array([1]));
 await assert.rejects(modelFile(config,'x',4,{cacheMs:5}),/不完整/);
 console.log('PASS: cache timeout fallback, byte progress, connection timeout, stalled stream, truncated model');
 
-let attempts=0;globalThis.fetch=async()=>{attempts++;throw new TypeError('Failed to fetch');};await assert.rejects(modelFile(config,'x',4,{cacheMs:5}),/Hugging Face/);assert.equal(attempts,2);console.log('PASS: failed fetch retry and actionable error');
+let attempts=0;globalThis.fetch=async()=>{attempts++;throw new TypeError('Failed to fetch');};await assert.rejects(modelFile(config,'x',4,{cacheMs:5}),/模型下载节点/);assert.equal(attempts,2);console.log('PASS: failed fetch retry and actionable error');
+
+const urls=[];globalThis.fetch=async url=>{urls.push(url);if(url.includes('bad.invalid'))throw new TypeError('Failed to fetch');return new Response(new Uint8Array([1,2,3,4]));};
+assert.equal((await modelFile({...config,sources:[{name:'镜像',base:'https://bad.invalid/'},{name:'原始',base:'https://good.invalid/'}]},'x',4,{cacheMs:5})).length,4);
+assert(urls.at(-1).includes('good.invalid'));console.log('PASS: mirror failure switches to origin');

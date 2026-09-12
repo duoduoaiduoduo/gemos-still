@@ -8,3 +8,5 @@ The full model license is included in APPLE-SHARP.txt. Research use only.
 
 Runtime: Microsoft ONNX Runtime Web 1.24.2, MIT license in ONNX-RUNTIME.txt.
 The application's worker, covariance conversion, storage, and user interface are independently implemented for Still. The user's photograph is processed locally; model downloads contact the weights provider, but do not contain the photograph.
+
+Downloads prefer the third-party hf-mirror.net mirror, falling back to Hugging Face. The pinned revision and expected file sizes are unchanged. No photographs are sent to either host.

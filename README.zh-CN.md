@@ -62,3 +62,5 @@ python3 -m http.server 8765 --bind 127.0.0.1
 ## 致谢
 
 作者：**Gemosdodo**。使用 Three.js、Apple SHARP（社区 ONNX 转换）、ONNX Runtime Web、Mediabunny 与 Blender Cycles。本项目独立制作，不代表上述项目或厂商背书。
+
+模型下载现优先使用第三方 hf-mirror.net 镜像，失败切换 Hugging Face；两者仅接收模型请求，不接收照片。镜像可用性仍取决于网络。

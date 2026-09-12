@@ -64,3 +64,5 @@ The independently authored application source is MIT-licensed. **SHARP model use
 ## Credits
 
 Created by **Gemosdodo**. Built with Three.js, Apple SHARP (community ONNX conversion), ONNX Runtime Web, Mediabunny and Blender Cycles. This project is independent and is not endorsed by those projects or vendors.
+
+Model downloads now prefer the third-party hf-mirror.net mirror and fall back to Hugging Face. Both hosts receive model requests only, never photos. Mirror availability varies by network.
