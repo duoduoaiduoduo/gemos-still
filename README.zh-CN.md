@@ -1,6 +1,6 @@
 <p align="center"><a href="README.md">English</a> · <strong>简体中文</strong></p>
 
-![Gemos Still — 把这一刻留下](gemos-still-cover.svg)
+![Gemos Still — 把这一刻留下](docs/cover.png)
 
 # Gemos Still 记忆盒子
 

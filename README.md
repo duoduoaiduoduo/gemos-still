@@ -1,6 +1,6 @@
 <p align="center"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a></p>
 
-![Gemos Still — a moment, kept.](gemos-still-cover.svg)
+![Gemos Still — a moment, kept.](docs/cover.png)
 
 # Gemos Still
 
