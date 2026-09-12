@@ -1,0 +1,10 @@
+Apple Machine Learning Research Model is licensed under the Apple Machine Learning Research Model License Agreement.
+
+Model: Apple SHARP, converted to ONNX FP16 (a derivative format/precision conversion).
+Weights provider: sentiantai/sharp-onnx-webgpu-weights on Hugging Face.
+Pinned revision: 1a426c9ac9394d2490ad4c78f8422c42771042a1.
+The format conversion is a community conversion, not an Apple-endorsed browser product.
+The full model license is included in APPLE-SHARP.txt. Research use only.
+
+Runtime: Microsoft ONNX Runtime Web 1.24.2, MIT license in ONNX-RUNTIME.txt.
+The application's worker, covariance conversion, storage, and user interface are independently implemented for Still. The user's photograph is processed locally; model downloads contact the weights provider, but do not contain the photograph.

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Gemos Still记忆盒子 — Gemosdodo</title><link rel="stylesheet" href="style.css"></head>
+<body>
+  <header class="topbar">
+    <a class="wordmark" href="/vibecoding" aria-label="返回好奇心，可以玩">Gemos Still<span>®</span></a>
+    <span class="site-description">记忆收藏室</span>
+    <div class="header-actions">
+      <button id="toggle-sidebar" aria-expanded="false" aria-controls="memory-panel">调整</button>
+      <div id="creation"><input id="photo-input" type="file" accept="image/jpeg,image/png,image/webp" hidden><button id="choose-photo" class="primary"><span>＋</span> 新建记忆</button></div>
+    </div>
+  </header>
+  <div class="workspace">
+    <section id="memory-panel" aria-label="记忆收藏">
+      <div class="sidebar-top"><p class="eyebrow">A PLACE FOR YOUR MOMENTS</p><h1>让这一刻，留下。</h1><p class="intro" id="intro">转动玻璃里的风景，收藏这一刻。</p></div>
+      <div id="library-section" hidden><label for="library">我的收藏 <span id="memory-count"></span></label><select id="library" aria-label="选择已保存的记忆"></select></div>
+      <div id="current-memory" hidden>
+        <div class="memory-summary"><img id="photo-preview" alt="记忆原照片"><div><h2 id="memory-name"></h2><p id="memory-date"></p></div></div>
+        <p id="job-message" role="status" aria-live="polite"></p>
+        <ol id="steps" aria-label="制作步骤" hidden><li>照片</li><li>重建</li><li>装盒</li><li>收藏</li></ol>
+        <button id="retry" hidden>重新制作 ↗</button>
+        <div id="memory-actions" hidden>
+          <button id="download-memory" class="primary">收藏到本机 <span>↓</span></button>
+          <div class="actions"><button id="save-settings">保存设置</button><button id="snapshot">导出画面 ↗</button></div><div class="actions"><button id="replay-creation">重播收藏过程 ↗</button></div>
+        </div>
+      </div>
+      <section class="composition" aria-label="内容构图">
+        <div class="section-title">内容构图 <span>01</span></div>
+        <div class="fit-options"><button id="fit-cover" aria-pressed="true">铺满显示仓</button><button id="fit-contain" aria-pressed="false">完整显示</button></div>
+        <label for="content-scale">内容大小 <output id="content-scaleValue">65%</output></label><input id="content-scale" type="range" min="0.65" max="1.75" step="0.01" value="0.65">
+        <label for="depth-volume">空间层次 <output id="depth-volumeValue">100%</output></label><input id="depth-volume" type="range" min="0.35" max="1" step="0.01" value="1">
+      </section>
+      <aside id="panel" aria-label="材质实验室"><details><summary>材质实验室 <span>＋</span></summary><div class="material-controls">
+        <label for="glow">柔光 <output id="glowValue">0.12</output></label><input id="glow" type="range" min="0" max="2" step="0.01" value="0.12">
+        <label for="frost">玻璃雾度 <output id="frostValue">0.03</output></label><input id="frost" type="range" min="0" max="1" step="0.005" value="0.025">
+        <label for="brightness">内容亮度 <output id="brightnessValue">1.05</output></label><input id="brightness" type="range" min="0.4" max="3" step="0.01" value="1.05">
+        <button id="motion" class="quiet" aria-pressed="true">暂停流光</button>
+      </div></details></aside>
+      <p id="connection">正在连接本机记忆库…</p><p class="format-note">JPG / PNG / WebP · 最大 25 MB</p>
+      <p id="notice" role="alert" hidden></p>
+    </section>
+    <section class="object-view" aria-label="记忆展示">
+      <div class="object-caption"><span>OBJECT 01</span><span>THE MEMORY TERMINAL</span></div>
+      <main id="stage" aria-label="可拖动旋转、滚轮缩放的复古电脑 3D 记忆盒子"></main>
+      <div class="view-bottom"><div><span class="object-number">01 /</span> 复古电脑 <span class="finish">暖白 · 透明玻璃</span></div><div class="view-controls"><button id="front-view">正面</button><button id="reset">复位 ↺</button></div></div>
+      <p id="view-hint">拖动旋转 · 滚轮缩放</p>
+    </section>
+  </div>
+  <div class="mobile-backdrop" id="close-sidebar" hidden></div>
+  <script type="module" src="browser-inference/ui.js?v=gallery-20260913-1"></script>
+<script type="module" src="film.js?v=film-fix-20260913-1"></script></body></html>

@@ -1,0 +1,55 @@
+import {memoryBox} from '../main.js?v=gallery-20260913-1';
+import {save,list,pack,unpack} from './library.js';
+const $=id=>document.getElementById(id);let records=[],current=null,worker=null,busy=false,epoch=0,urls=[],operation=null,cancelJob=null;
+function notice(text=''){ $('notice').textContent=text;$('notice').hidden=!text;}
+function sidebar(open){document.body.classList.toggle('sidebar-open',open);$('toggle-sidebar').textContent=open?'关闭':'调整';$('toggle-sidebar').setAttribute('aria-expanded',String(open));$('close-sidebar').hidden=!open;}
+function lock(on){busy=on;$('library').disabled=on;$('replay-creation').disabled=on;$('choose-photo').textContent=on?'取消制作':'＋ 新建记忆';$('import-memory').disabled=on;$('view-example').disabled=on;}
+function stop(){memoryBox.setComputing(false);epoch++;operation=null;cancelJob?.(Error('已取消'));cancelJob=null;worker?.terminate();worker=null;memoryBox.cancelCreation();lock(false);status('制作已取消 · 已有记忆保留');notice('制作已取消，已有记忆保留。');}
+function status(text){$('job-message').textContent=text;$('connection').textContent=text;}
+async function refresh(){try{records=await list();}catch{notice('浏览器存储不可用，生成后请立即导出记忆。');}const select=$('library');select.replaceChildren();const placeholder=new Option('选择一份记忆…','');select.append(placeholder);for(const r of records){const o=document.createElement('option');o.value=r.id;o.textContent=r.name;select.append(o);}$('library-section').hidden=!records.length;$('memory-count').textContent=records.length;if(current)select.value=current.id;}
+async function show(record,reveal=false){
+ const token=++epoch;if(!reveal)memoryBox.cancelCreation();current=record;
+ urls.forEach(URL.revokeObjectURL);urls=[];
+ const photo=record.photo?URL.createObjectURL(record.photo):record.photo_url,model=record.model?URL.createObjectURL(new Blob([record.model])):record.model_url;if(record.photo)urls.push(photo);if(record.model)urls.push(model);
+ $('current-memory').hidden=false;$('photo-preview').src=photo;$('memory-name').textContent=record.name;$('memory-date').textContent=new Date(record.created_at).toLocaleDateString('zh-CN');$('steps').hidden=true;$('retry').hidden=true;$('memory-actions').hidden=false;$('download-memory').hidden=!record.model;$('save-settings').textContent='保存设置到本机';$('library').value=record.id;
+ status('正在打开这段记忆…');try{await memoryBox.load(model,record.settings,reveal);if(token!==epoch)return;status('已收藏 · 记忆保存在这台设备');}catch(e){if(token===epoch){notice(e.message);sidebar(true);}throw e;}
+}
+const dialog=document.createElement('dialog');dialog.className='local-generation';dialog.innerHTML=`<form method="dialog"><button class="dialog-close" aria-label="关闭制作说明">×</button></form><p class="eyebrow">MADE ON YOUR DEVICE</p><h2>在这里，留住一刻。</h2><p>照片与生成过程留在你的设备。首次需下载约 1.31 GB 模型，之后优先使用本机缓存。</p><p id="gpu-status" role="status">正在检测设备…</p><button id="local-select" class="primary" disabled>选择照片并制作</button><button id="local-example" disabled>用示例风景试一试 ↗</button><small>请保持页面打开。生成会占用本机 GPU 和内存；关闭页面会停止制作。<br>本机保存可能被浏览器清理，重要记忆请导出备份。</small><details><summary>模型与缓存</summary><p>SHARP 的浏览器格式转换版本，用于非商业研究实验。<a href="./browser-inference/licenses/APPLE-SHARP.txt" target="_blank" rel="noopener">模型许可</a> · <a href="./browser-inference/licenses/NOTICE.txt" target="_blank" rel="noopener">来源与修改说明</a></p><button id="clear-model">清除本机模型缓存</button></details>`;document.body.append(dialog);
+async function probeWorker(){
+ let probe,timer;
+ try{await new Promise((resolve,reject)=>{timer=setTimeout(()=>reject(Error('这个浏览器的后台计算未响应。请用最新版 Chrome 打开同一网址再试；已有记忆仍可查看。')),15000);probe=new Worker(new URL('./worker.js',import.meta.url),{type:'module'});probe.onmessage=({data})=>{if(data.type==='probe-ready')resolve();else if(data.type==='error')reject(Error(data.text+'。请用最新版 Chrome 打开同一网址再试。'));};probe.onerror=()=>reject(Error('浏览器无法启动后台计算组件，请用最新版 Chrome 打开同一网址再试。'));probe.postMessage({type:'probe'});});}finally{clearTimeout(timer);probe?.terminate();}
+}
+async function setup(){dialog.showModal();$('local-select').disabled=$('local-example').disabled=true;try{const a=await navigator.gpu?.requestAdapter({powerPreference:'high-performance'});if(!a?.features.has('shader-f16'))throw Error('当前设备不支持所需的 WebGPU 半精度计算。请更新支持 WebGPU 的浏览器；你仍可查看示例、打开记忆文件。');$('gpu-status').textContent='正在检测浏览器后台计算…';await probeWorker();$('gpu-status').textContent=matchMedia('(pointer:coarse)').matches?'手机 GPU 检测通过 · 本机生成试运行，内存不足时可能无法完成':'设备支持 · 使用你自己的 GPU';$('local-select').disabled=$('local-example').disabled=false;}catch(e){$('gpu-status').textContent=e.message;}}
+$('local-select').onclick=()=>$('photo-input').click();
+$('local-example').onclick=async()=>{try{const blob=await(await fetch('./photo.jpg?v=gallery-20260913-1')).blob();dialog.close();await create(new File([blob],'站内人潮 · 一刻记忆.jpg',{type:'image/jpeg'}));}catch(e){notice(e.message);sidebar(true);}};
+$('clear-model').onclick=async()=>{try{const root=await navigator.storage.getDirectory();for await(const name of root.keys())if(name.startsWith('still-sharp-'))await root.removeEntry(name,{recursive:true});$('gpu-status').textContent='模型缓存已清除';}catch{$('gpu-status').textContent='当前浏览器无法清除缓存';}};
+async function create(file){
+ if(busy)return;if(!file||!['image/jpeg','image/png','image/webp'].includes(file.type)){notice('请选择 JPG、PNG 或 WebP 照片');return;}if(file.size>25*1024*1024){notice('照片不能超过 25 MB');return;}
+ dialog.close();notice();sidebar(false);lock(true);memoryBox.setComputing(true);const token=++epoch,op={};operation=op;
+ let arrived=false,lastStatus='正在准备本机模型';
+ const arrival=memoryBox.beginCreation(file,file.name.replace(/\.[^.]+$/,'')).then(()=>{arrived=true;if(token===epoch)memoryBox.waiting(lastStatus);});
+ let runningWorker,watchdog;
+ try{
+ runningWorker=new Worker(new URL('./worker.js',import.meta.url),{type:'module'});worker=runningWorker;
+ const result=new Promise((resolve,reject)=>{cancelJob=reject;const arm=(ms,text)=>{clearTimeout(watchdog);watchdog=setTimeout(()=>reject(Error(text)),ms);};arm(30000,'本机任务没有启动响应，请更新浏览器并刷新重试');runningWorker.onmessage=({data})=>{if(token!==epoch)return;if(data.type==='status'){arm(['initializing','inference'].includes(data.phase)?300000:60000,'当前步骤长时间没有响应：'+data.text+'。请重试；若再次失败，请提供手机型号和浏览器。');lastStatus=data.text;status(data.text);if(arrived)memoryBox.waiting(data.text);}else if(data.type==='complete')resolve(data.buffer);else if(data.type==='error')reject(Error(data.text));};runningWorker.onerror=()=>reject(Error('浏览器未能完成推理，可能是内存不足或 GPU 不兼容。已有记忆仍可打开。'));});
+ runningWorker.postMessage({photo:file});
+ const [buffer]=await Promise.all([result,arrival]);if(token!==epoch)return;
+ const record={id:crypto.randomUUID(),name:file.name.replace(/\.[^.]+$/,'').slice(0,60)||'一段记忆',created_at:new Date().toISOString(),photo:file,model:buffer,settings:{designVersion:2,depthVolume:1}};
+ try{await save(record);}catch{notice('本机存储不足，请立即导出这份记忆。');}
+ await refresh();await show(record,true);
+ }catch(e){if(operation===op){memoryBox.cancelCreation();notice('制作未完成：'+e.message);status('照片没有上传，可重试或换一台设备。');sidebar(true);}}
+ finally{clearTimeout(watchdog);memoryBox.setComputing(false);runningWorker?.terminate();if(operation===op){operation=null;worker=null;cancelJob=null;lock(false);}}
+}
+$('choose-photo').onclick=()=>busy?stop():setup();$('photo-input').onchange=e=>{create(e.target.files[0]);e.target.value='';};
+const importButton=document.createElement('button');importButton.id='import-memory';importButton.textContent='打开记忆文件';importButton.className='quiet';$('creation').append(importButton);const input=document.createElement('input');input.type='file';input.accept='.still';input.hidden=true;document.body.append(input);importButton.onclick=()=>input.click();input.onchange=async()=>{try{const r=await unpack(input.files[0]);try{await save(r);}catch{notice('无法保存到浏览器，但仍可查看这份记忆。');}await refresh();await show(r);}catch(e){notice(e.message);sidebar(true);}input.value='';};
+$('library').onchange=async()=>{const r=records.find(r=>r.id===$('library').value);if(r)await show(r).catch(()=>{});};
+$('save-settings').onclick=async()=>{if(!current)return;try{current.settings=memoryBox.getSettings();if(current.model)await save(current);else localStorage.setItem(`still-demo-settings-${current.id}`, JSON.stringify(current.settings));notice('设置已保存在这台设备。');}catch(e){notice(e.message);}};
+function download(blob,name){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);}
+$('download-memory').textContent='导出记忆文件 ↓';$('download-memory').onclick=()=>{if(current?.model){current.settings=memoryBox.getSettings();download(pack(current),`${current.name.replace(/[\\/:*?"<>|]/g,'_')}.still`);}};
+$('snapshot').onclick=()=>{const a=document.createElement('a');a.href=memoryBox.capture();a.download='still-memory.png';a.click();};
+$('replay-creation').onclick=async()=>{if(busy||!current)return;lock(true);const r=current,op={};operation=op;try{const photo=r.photo||await(await fetch(r.photo_url)).blob();if(operation!==op)return;await memoryBox.beginCreation(photo,r.name);await new Promise(resolve=>setTimeout(resolve,1200));if(operation===op)await show(r,true);}catch(e){if(operation===op){memoryBox.cancelCreation();notice(e.message);}}finally{if(operation===op){operation=null;lock(false);}}};
+$('toggle-sidebar').onclick=()=>sidebar(!document.body.classList.contains('sidebar-open'));$('close-sidebar').onclick=()=>sidebar(false);
+window.addEventListener('beforeunload',e=>{if(busy){e.preventDefault();e.returnValue='';}});
+for(const type of ['dragover','drop'])document.addEventListener(type,e=>e.preventDefault());document.addEventListener('drop',e=>{if(!busy){notice('请点击「新建记忆」检查设备后选择照片。');sidebar(true);}});
+const example=document.createElement('button');example.id='view-example';example.className='quiet';example.textContent='查看示例';$('library-section').before(example);example.onclick=async()=>{if(busy)return;try{const demo=await(await fetch('./memory.json?v=gallery-20260913-1')).json();try{demo.settings=JSON.parse(localStorage.getItem(`still-demo-settings-${demo.id}`))||demo.settings;}catch{}await show(demo);}catch(e){notice(e.message);sidebar(true);}};
+async function boot(){document.querySelector('.format-note').textContent='照片留在本机 · JPG / PNG / WebP';$('creation').hidden=false;await refresh();status('等待收藏 · 新建记忆或打开已有记忆');}boot().catch(e=>{notice(e.message);sidebar(true);});
