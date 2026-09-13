@@ -21,8 +21,14 @@ jobs:
       - name: Preserve experimental signing identity
         uses: actions/cache@v4
         with:
-          path: ~/.android/debug.keystore
-          key: gemos-android-experimental-signing-v2
+          path: ~/.android/gemos-debug.keystore
+          key: gemos-android-explicit-signing-v4
+      - name: Prepare explicit experimental keystore
+        run: |
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/gemos-debug.keystore" ]; then
+            keytool -genkeypair -keystore "$HOME/.android/gemos-debug.keystore" -storepass android -keypass android -alias androiddebugkey -dname "CN=Gemos Still Experimental" -keyalg RSA -keysize 2048 -validity 10000
+          fi
       - run: gradle -p android assembleDebug lintDebug --no-daemon
       - name: Verify APK signature
         run: |

@@ -10,3 +10,5 @@ baked/source.json
 android/.gradle/
 android/**/build/
 android/local.properties
+
+android/tools/__pycache__/

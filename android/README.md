@@ -1,14 +1,13 @@
-# Gemos Still — native Android experiment
+# Gemos Still — native Android low-memory experiment
 
-This is a native Android/ONNX Runtime test, not a WebView wrapper. Requires ARM64 Android 9+. Download about 1.31 GB of research-licensed SHARP weights. Photos stay local. CPU and NNAPI are experimental: model operator support, memory and speed must be verified on a physical device. Successful compilation is not proof that SHARP runs on every phone.
+Android 9+, ARM64. Version 0.4 uses internal 256x256 SHARP adaptation with INT8 constant-weight MatMul and CPU inference. It generates 32,768 Gaussians and intentionally has less detail than the desktop model. This is an experimental derivative, not an official Apple mobile model. See [memory measurements and limitations](MEMORY-STUDY.md).
 
-Build: JDK 17, Android SDK 35, Gradle 8.9; `gradle -p android assembleDebug`. The GitHub Actions workflow produces an installable debug-signed APK. This is not a Play Store release. Keep the app foreground during inference. The UI reports the last interrupted stage after process death. Export the diagnostic log if generation fails. A successful run exports `.still` for the web viewer; this first version does not reproduce the 3D terminal UI.
+Install the APK, import `Gemos-Still-Lite-256.gemosmodel`, choose a photo and generate while keeping the app foreground. The model package is separate and remains local pending publication approval. Photos are processed locally. Successful output exports as .still for the existing web viewer. The full 3D viewer is not included.
 
-这是原生推理验证版，非网页套壳。Android 9+、ARM64。首次下载约 1.31 GB 模型；照片本地处理。CPU/系统加速能否支持完整 SHARP，需要真机验证。请保持前台；中断后会显示最后步骤。成功可导出 `.still`，使用网页查看器打开。未在此首版中移植完整 3D 展示界面。模型仅限其许可证允许的研究用途，见 MODEL-LICENSE.txt。
+Build with JDK17, SDK35, Gradle8.9 and the explicit debug keystore configured in the workflow. Android build/lint/signing checks run in GitHub Actions. Debug builds are not store releases. Previous versions used a lost ephemeral certificate; upgrading may require export/backup followed by uninstall, which removes previous cache. Future experimental keys are explicitly stored/cached; cache retention is not production signing.
 
-## 0.2 compatibility patch
-AveragePool runs through FP32 casts, retaining FP16 weights and outputs. This avoids the reported ARM CPU internal NHWC FP16 AveragePool kernel mismatch. A deterministic numerical test passes against FP32 pooling rounded to FP16; full vivo inference remains unverified. The patched graph is bundled in the APK and continues to reference the original external weight filename. Source model: sentiantai/sharp-onnx-webgpu-weights revision 1a426c9ac9394d2490ad4c78f8422c42771042a1; model terms remain in MODEL-LICENSE.txt.
+## 中文
 
-0.1 used an ephemeral CI debug certificate. Updating to 0.2 may require uninstalling 0.1, which removes its local model cache and app data. Export any memories/logs first. The workflow now caches the experimental certificate for subsequent builds (cache eviction can still reset it); this is not production signing.
+这是内部 256×256、约 3.3 万粒子的原生低内存实验版，细节低于桌面版。开发机真实照片测试峰值约 1.70 GiB，尚未通过 vivo 真机验证。先安装 APK，再导入单独提供的 .gemosmodel 模型包，选择照片并保持应用前台。成功后保存 .still，在网页中查看。闪退后重新打开并导出诊断日志。
 
-0.2 针对平均池化算子使用单精度计算，保留半精度权重；已通过局部数值测试，尚未验证 vivo 完整生成。旧版使用临时调试签名，覆盖安装可能提示签名冲突。需先导出已有记忆和日志，再卸载旧版；卸载会删除模型缓存，需要重新下载。
+旧版签名无法恢复，升级可能需要卸载旧版；请先导出记忆和日志。模型遵循 [Apple SHARP 研究许可证](MODEL-LICENSE.txt)。修改后模型权重尚未公开发布，等待单独授权。
