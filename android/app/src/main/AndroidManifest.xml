@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<uses-permission android:name="android.permission.INTERNET"/>
+<application android:label="Gemos Still 实验版" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false" android:largeHeap="true" android:usesCleartextTraffic="false" android:supportsRtl="true">
+<activity android:name=".MainActivity" android:exported="true" android:configChanges="orientation|screenSize"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity>
+</application></manifest>

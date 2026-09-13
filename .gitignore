@@ -7,3 +7,6 @@ examples/
 *.still
 __pycache__/
 baked/source.json
+android/.gradle/
+android/**/build/
+android/local.properties
