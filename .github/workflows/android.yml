@@ -18,6 +18,11 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+      - name: Preserve experimental signing identity
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: gemos-android-experimental-signing-v2
       - run: gradle -p android assembleDebug lintDebug --no-daemon
       - name: Verify APK signature
         run: |
