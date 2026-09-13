@@ -8,7 +8,7 @@ export function toFloat(t){
  for(let i=0;i<a.length;i++){const b=bits[i],s=b&32768?-1:1,e=(b>>10)&31,f=b&1023;a[i]=s*(e===0?f*2**-24:e===31?(f?NaN:Infinity):(1+f/1024)*2**(e-15));}return a;
 }
 export function half(a){const out=new Uint16Array(a.length),v=new Float32Array(1),u=new Uint32Array(v.buffer);for(let i=0;i<a.length;i++){v[0]=a[i];const b=u[0],sign=(b>>>16)&32768,e=((b>>>23)&255)-112,m=b&8388607;out[i]=e<=0?(e< -10?sign:sign|(((m|8388608)>>(1-e))+4096>>13)):e>=31?sign|31744:sign|((e<<10)+(m+4096>>13));}return out;}
-export function prepare(outputs,width,height,focal,limit=500000){
+export function prepare(outputs,width,height,focal,limit=500000,gridWidth=768){
  const means=toFloat(outputs.mean_vectors_ndc),scales=toFloat(outputs.singular_values_ndc),q=toFloat(outputs.quaternions_ndc),colors=toFloat(outputs.colors),alpha=toFloat(outputs.opacities),n=alpha.length;
  if(means.length!==n*3||scales.length!==n*3||q.length!==n*4||colors.length!==n*3)throw Error('模型输出尺寸不匹配');
  const sx=width/(2*focal),sy=height/(2*focal),samples=[];
@@ -16,7 +16,7 @@ export function prepare(outputs,width,height,focal,limit=500000){
  if(samples.length<100)throw Error('照片未能生成有效的空间内容');
  const depths=samples.map(i=>means[i*3+2]).sort((a,b)=>a-b),median=quantile(depths,.5),adaptive=quantile(depths,.95)/quantile(depths,.1)>3;
  // Favor near, opaque detail over a distant sky; regular image-grid neighbors estimate contrast.
- const weights=samples.map(i=>{let detail=0;for(const j of [i-1,i+1,i-768,i+768])if(j>=0&&j<n)for(let c=0;c<3;c++)detail+=Math.abs(colors[i*3+c]-colors[j*3+c]);return alpha[i]*(.07+Math.min(1,detail*3))*Math.min(6,(median/means[i*3+2])**1.25);});
+ const weights=samples.map(i=>{let detail=0;for(const j of [i-1,i+1,i-gridWidth,i+gridWidth])if(j>=0&&j<n)for(let c=0;c<3;c++)detail+=Math.abs(colors[i*3+c]-colors[j*3+c]);return alpha[i]*(.07+Math.min(1,detail*3))*Math.min(6,(median/means[i*3+2])**1.25);});
  const ranked=samples.map((i,k)=>[means[i*3+2],weights[k]]).sort((a,b)=>a[0]-b[0]);let total=weights.reduce((a,b)=>a+b,0),sum=0,reference=median;for(const [z,w]of ranked){sum+=w;if(sum>=total*.5){reference=z;break;}}
  function warp(x,y,z){const t=Math.tanh(Math.log(Math.max(z,1e-6)/reference)/1.5),g=adaptive?reference*(1+.6*t):z,f=g/z;return [x*sx*f,-y*sy*f,-g];}
  const points=samples.map(i=>warp(...means.subarray(i*3,i*3+3))),bounds=[0,1,2].map(c=>points.map(p=>p[c]).sort((a,b)=>a-b)),lo=bounds.map(a=>quantile(a,.005)),hi=bounds.map(a=>quantile(a,.995));

@@ -39,11 +39,12 @@ Start with the built-in example, or open a previously exported memory. To create
 | Operation | Requirement |
 | --- | --- |
 | View the terminal and an existing memory | WebGL 2 browser; touch controls supported |
-| Generate from a photo | WebGPU with `shader-f16`, enough GPU memory, access to the external model host |
+| Generate on desktop | Original FP16 WebGPU model, `shader-f16`, enough GPU memory |
+| Generate on mobile (experimental) | Automatic Lite model download; CPU WebAssembly and sufficient memory |
 | Export an MP4 | WebCodecs with supported H.264 encoding; AAC for music |
 | Publish the site | Static hosting over HTTPS |
 
-First inference downloads approximately **1.31 GB** of community-converted SHARP weights from Hugging Face. OPFS caches them when available. A phone having a GPU does not guarantee that its browser exposes the required features or has enough memory. There is no server inference or WASM fallback. Viewing the example does not test inference compatibility.
+First desktop inference downloads approximately **1.31 GB** of community-converted SHARP weights from Hugging Face. OPFS caches them when available. A phone having a GPU does not guarantee that its browser exposes the required features or has enough memory. Mobile has a separate 256 INT8 CPU/WASM path using the [Android Lite model package](https://github.com/duoduoaiduoduo/gemos-still/releases/tag/android-v0.4.0-lite), automatically downloaded from the site and cached locally (~809 MB); importing an existing package is optional. Desktop remains unchanged. There is no server inference. Viewing the example does not test inference compatibility.
 
 Single-image reconstruction cannot recover unseen surfaces. Large rotations may reveal holes, stretched areas or missing geometry. Depth fitting and subject weighting are geometric heuristics, not semantic object recognition. Glass uses real-time approximations; this is not full-scene path tracing.
 

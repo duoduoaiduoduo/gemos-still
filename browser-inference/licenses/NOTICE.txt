@@ -10,3 +10,7 @@ Runtime: Microsoft ONNX Runtime Web 1.24.2, MIT license in ONNX-RUNTIME.txt.
 The application's worker, covariance conversion, storage, and user interface are independently implemented for Still. The user's photograph is processed locally; model downloads contact the weights provider, but do not contain the photograph.
 
 Downloads prefer the third-party hf-mirror.net mirror, falling back to Hugging Face. The pinned revision and expected file sizes are unchanged. No photographs are sent to either host.
+
+Mobile-only derivative: Gemos Still Lite 256 INT8, published in duoduoaiduoduo/gemos-still release android-v0.4.0-lite. Reduced spatial resolution and non-overlapping patches; dynamic per-channel quantization of constant-weight MatMul. This derivative remains subject to APPLE-SHARP.txt and is not an Apple-endorsed mobile model. Automatically downloaded from the site or optionally imported locally by the user, never a photo upload.
+CPU runtime: ONNX Runtime Web 1.24.2, same MIT license ONNX-RUNTIME.txt.
+Incremental package checksum: hash-wasm 4.12.0 (SHA-256 only), MIT license HASH-WASM.txt.
