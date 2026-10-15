@@ -22,18 +22,20 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.android/gemos-debug.keystore
-          key: gemos-android-explicit-signing-v4
+          key: gemos-android-mobile-signing-v1
       - name: Prepare explicit experimental keystore
         run: |
           mkdir -p "$HOME/.android"
           if [ ! -f "$HOME/.android/gemos-debug.keystore" ]; then
             keytool -genkeypair -keystore "$HOME/.android/gemos-debug.keystore" -storepass android -keypass android -alias androiddebugkey -dname "CN=Gemos Still Experimental" -keyalg RSA -keysize 2048 -validity 10000
           fi
-      - run: gradle -p android assembleDebug lintDebug --no-daemon
+      - run: gradle -p android assembleDebug assembleDebugAndroidTest lintDebug --no-daemon
       - name: Verify APK signature
         run: |
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose android/app/build/outputs/apk/debug/app-debug.apk
       - uses: actions/upload-artifact@v4
         with:
           name: Gemos-Still-Android-experimental
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk

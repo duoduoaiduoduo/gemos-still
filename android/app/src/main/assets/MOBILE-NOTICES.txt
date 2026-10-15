@@ -1,0 +1,20 @@
+Gemos Still for Android — native preview
+Developer: GemosDodo
+Project: https://github.com/duoduoaiduoduo/gemos-still
+
+The terminal geometry, keyboard legends, stickers, baked lighting and app icon
+are reused from the existing Gemos Still product. The 32,768-record bundled
+station example is a subsample of that product's public demonstration scene.
+It is an example, not a benchmark of this phone's generated image quality.
+
+The optional 256x256 INT8 SHARP model is an experimental derivative, not an
+official Apple mobile model. Its detail differs from the original desktop
+model. Apple SHARP weights are subject to the Apple SHARP research license:
+https://github.com/duoduoaiduoduo/gemos-still/blob/main/android/MODEL-LICENSE.txt
+
+ONNX Runtime is distributed under the MIT License:
+https://github.com/microsoft/onnxruntime/blob/main/LICENSE
+
+Photos, generated memories and model inference remain on this device.
+Internet access is used to download verified model files from gemosdodo.art.
+Opening references and sharing are explicit user actions.
