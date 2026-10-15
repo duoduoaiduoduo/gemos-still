@@ -188,7 +188,7 @@ public final class MemorySceneView extends GLSurfaceView {
         int[] buckets;
         FloatBuffer orderFloats;
         int count, textureHeight;
-        boolean loaded, ready, dirtyOrder = true, dragging;
+        boolean loaded, ready, dirtyOrder = true, dragging, pendingUpload;
         float yaw = .608f, pitch = .395f, radius = 14.9f;
         float targetYaw = yaw, targetPitch = pitch, targetRadius = radius;
         float lastSortX = 100, lastSortY = 100, lastSortZ = 100;
@@ -239,7 +239,13 @@ public final class MemorySceneView extends GLSurfaceView {
 
         @Override public void onDrawFrame(GL10 gl) {
             if (!ready) { GLES30.glClearColor(.04f,.04f,.04f,1); GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT); return; }
-            try { draw(); } catch (Throwable e) { reportFailure("Frame rendering", e); }
+            try {
+                // GLSurfaceView may execute queueEvent while paused, with no EGL
+                // context current. Only its draw callback guarantees a drawable
+                // surface, so staged CPU memories become GPU resources here.
+                if (pendingUpload) uploadGaussians();
+                draw();
+            } catch (Throwable e) { reportFailure("Frame rendering", e); }
         }
 
         void draw() {
@@ -304,7 +310,7 @@ public final class MemorySceneView extends GLSurfaceView {
         void zoom(float factor) { if (Float.isFinite(factor) && factor > 0) targetRadius = clamp(targetRadius / factor, 7.2f, 22); }
         void front() { targetYaw = yaw + shortestAngle(-yaw); targetPitch = .071f; targetRadius = 12.2f; }
         void reset() { targetYaw = yaw + shortestAngle(.608f-yaw); targetPitch = .395f; targetRadius = 14.9f; }
-        void clear() { loaded = false; memoryLoaded = false; needsAnimation = true; idleData = makeIdle(); data = idleData; if (ready) uploadGaussians(); }
+        void clear() { loaded = false; memoryLoaded = false; needsAnimation = true; idleData = makeIdle(); data = idleData; pendingUpload = true; }
 
         void load(float[] source) {
             final int n = source.length / 16;
@@ -334,7 +340,7 @@ public final class MemorySceneView extends GLSurfaceView {
             }
             if(written==0){Log.w(TAG,"No Gaussian records remain in chamber");return;}
             data=Arrays.copyOf(transformed,written*16);loaded=true;memoryLoaded=true;needsAnimation=true;revealStart=SystemClock.uptimeMillis();
-            if(ready)uploadGaussians();
+            pendingUpload=true;
             Log.i(TAG,"Loaded "+written+" anisotropic Gaussians into chamber");
         }
 
@@ -354,7 +360,7 @@ public final class MemorySceneView extends GLSurfaceView {
             order=new float[count];depths=new float[count];buckets=new int[count];orderFloats=floats(new float[count]);
             GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER,orderBuffer);
             GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER,count*4,null,GLES30.GL_DYNAMIC_DRAW);
-            dirtyOrder=true;
+            dirtyOrder=true;pendingUpload=false;
         }
 
         /** Stable 16-bit counting sort: no boxed objects or per-frame allocations. */

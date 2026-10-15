@@ -17,6 +17,10 @@ public final class ViewerSmokeTest extends Instrumentation {
   Bitmap bitmap=getUiAutomation().takeScreenshot();require(bitmap!=null,"Screenshot unavailable");
   try(OutputStream out=new FileOutputStream(new File(getTargetContext().getFilesDir(),name))){bitmap.compress(Bitmap.CompressFormat.PNG,100,out);}finally{bitmap.recycle();}
  }
+ private void drag(MemorySceneView scene){
+  long start=android.os.SystemClock.uptimeMillis();float x=scene.getWidth()*.55f,y=scene.getHeight()*.5f;
+  for(int i=0;i<=8;i++){int action=i==0?MotionEvent.ACTION_DOWN:i==8?MotionEvent.ACTION_UP:MotionEvent.ACTION_MOVE;MotionEvent event=MotionEvent.obtain(start,start+i*32,action,x+i*scene.getWidth()*.03f,y,0);scene.dispatchTouchEvent(event);event.recycle();}
+ }
  @Override public void onStart(){
   Bundle report=new Bundle();
   try {
@@ -37,8 +41,14 @@ public final class ViewerSmokeTest extends Instrumentation {
    capture("viewer-smoke-default.png");
    runOnMainSync(scene::front);Thread.sleep(1800);capture("viewer-smoke-front.png");
    runOnMainSync(scene::reset);Thread.sleep(1800);capture("viewer-smoke-reset.png");
+   long before=new JSONObject(scene.diagnostics()).optLong("frameCount");
+   runOnMainSync(()->drag(scene));Thread.sleep(1500);capture("viewer-smoke-orbit.png");
+   require(new JSONObject(scene.diagnostics()).optLong("frameCount")>before,"Orbit gesture did not wake rendering");
+   runOnMainSync(scene::onPause);runOnMainSync(()->scene.loadMemory(content.records));Thread.sleep(200);
+   runOnMainSync(scene::onResume);Thread.sleep(2200);capture("viewer-smoke-resumed.png");
    state=new JSONObject(scene.diagnostics());require(state.optString("error","").isEmpty(),"GL error after camera movement");
-   report.putString("result","PASS");report.putString("renderer",state.toString());report.putInt("inputParticleCount",content.records.length/16);report.putString("scope","one viewer session, no inference, three camera screenshots");
+   require(state.optInt("glError")==0&&state.optBoolean("ready")&&state.optBoolean("memoryLoaded"),"GL state invalid after pause/resume");
+   report.putString("result","PASS");report.putString("renderer",state.toString());report.putInt("inputParticleCount",content.records.length/16);report.putString("scope","one viewer session, no inference, camera controls, orbit gesture and paused data upload");
    finish(Activity.RESULT_OK,report);
   } catch(Throwable error){report.putString("result","FAIL");report.putString("error",android.util.Log.getStackTraceString(error));finish(Activity.RESULT_CANCELED,report);}
  }

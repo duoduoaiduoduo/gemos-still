@@ -30,11 +30,13 @@ public class MainActivity extends Activity implements GenerationEngine.Listener 
  private Button primary,secondary,example,open,create,more;
  private File photo,currentMemory,displayedResult;
  private String photoTitle="一刻记忆";
- private int imageWidth,imageHeight,selectionTicket;
- private boolean preparing,resumed,destroyed,showingExample;
+ private int imageWidth,imageHeight,selectionTicket,pendingPicker;
+ private boolean preparing,resumed,destroyed,showingExample,restorePickerWorkspace;
 
  @Override public void onCreate(Bundle saved){
   super.onCreate(saved);
+  pendingPicker=saved==null?0:saved.getInt("pendingPicker",0);
+  restorePickerWorkspace=pendingPicker!=0;
   Object retained=getLastNonConfigurationInstance();engine=retained instanceof GenerationEngine?(GenerationEngine)retained:new GenerationEngine(this);
   getWindow().setStatusBarColor(PAPER);getWindow().setNavigationBarColor(PAPER);
   getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
@@ -47,7 +49,7 @@ public class MainActivity extends Activity implements GenerationEngine.Listener 
   }
   engine.attach(this);
   File latest=new File(getFilesDir(),"last-memory.still");
-  if(latest.isFile()&&!engine.state().running&&!preparing)loadMemory(latest,false);else updateControls();
+  if(pendingPicker==0&&latest.isFile()&&!engine.state().running&&!preparing)loadMemory(latest,false);else updateControls();
   CrashDiagnostics.append(this,"Mobile viewer beta · "+Build.MANUFACTURER+" "+Build.MODEL+" · Android "+Build.VERSION.RELEASE);
  }
 
@@ -56,7 +58,7 @@ public class MainActivity extends Activity implements GenerationEngine.Listener 
   root.setOnApplyWindowInsetsListener((view,insets)->{view.setPadding(insets.getSystemWindowInsetLeft(),insets.getSystemWindowInsetTop(),insets.getSystemWindowInsetRight(),insets.getSystemWindowInsetBottom());return insets;});
   setContentView(root);root.requestApplyInsets();
   LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);header.setPadding(dp(20),0,dp(12),0);
-  TextView brand=text("Gemos Still",22,INK);brand.setTypeface(Typeface.create("sans-serif-medium",0));brand.setGravity(Gravity.CENTER_VERTICAL);header.addView(brand,new LinearLayout.LayoutParams(0,dp(64),1));
+  TextView brand=text("Gemos Still",22,INK);brand.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));brand.setGravity(Gravity.CENTER_VERTICAL);header.addView(brand,new LinearLayout.LayoutParams(0,dp(64),1));
   create=button("＋ 新建",false);create.setContentDescription("选择照片，新建记忆");create.setOnClickListener(v->choosePhoto());header.addView(create,new LinearLayout.LayoutParams(dp(82),dp(44)));
   more=button("•••",false);more.setTextSize(19);more.setContentDescription("更多操作");more.setOnClickListener(this::menu);header.addView(more,new LinearLayout.LayoutParams(dp(46),dp(44)));root.addView(header);
 
@@ -76,7 +78,7 @@ public class MainActivity extends Activity implements GenerationEngine.Listener 
   thumbnail=new ImageView(this);thumbnail.setScaleType(ImageView.ScaleType.CENTER_CROP);thumbnail.setClipToOutline(true);thumbnail.setBackground(shape(PAPER,10,0));thumbnail.setVisibility(View.GONE);
   LinearLayout.LayoutParams previewLayout=new LinearLayout.LayoutParams(dp(52),dp(52));previewLayout.setMarginEnd(dp(12));summary.addView(thumbnail,previewLayout);
   LinearLayout copy=new LinearLayout(this);copy.setOrientation(LinearLayout.VERTICAL);
-  title=text("把照片，收藏成 3D 记忆。",19,INK);title.setTypeface(Typeface.create("sans-serif-medium",0));title.setMaxLines(1);title.setEllipsize(TextUtils.TruncateAt.END);copy.addView(title);
+  title=text("把照片，收藏成 3D 记忆。",19,INK);title.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));title.setMaxLines(1);title.setEllipsize(TextUtils.TruncateAt.END);copy.addView(title);
   subtitle=text("从一张照片开始。照片全程留在本机。",12,MUTED);subtitle.setMaxLines(2);subtitle.setPadding(0,dp(6),0,0);copy.addView(subtitle);summary.addView(copy,new LinearLayout.LayoutParams(0,-2,1));card.addView(summary);
   progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);progress.setMax(1000);progress.setProgressTintList(android.content.res.ColorStateList.valueOf(0xff7e8b73));progress.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(0xffe5e9e0));
   LinearLayout.LayoutParams progressLayout=new LinearLayout.LayoutParams(-1,dp(5));progressLayout.topMargin=dp(14);card.addView(progress,progressLayout);progress.setVisibility(View.GONE);
@@ -91,7 +93,7 @@ public class MainActivity extends Activity implements GenerationEngine.Listener 
  private boolean busy(){return preparing||engine.state().running;}
  private TextView text(String value,int size,int color){TextView view=new TextView(this);view.setText(value);view.setTextSize(size);view.setTextColor(color);view.setFontFeatureSettings("kern");return view;}
  private GradientDrawable shape(int color,int radius,int stroke){GradientDrawable drawable=new GradientDrawable();drawable.setColor(color);drawable.setCornerRadius(dp(radius));if(stroke!=0)drawable.setStroke(dp(1),stroke);return drawable;}
- private Button button(String value,boolean filled){Button button=new Button(this);button.setText(value);button.setAllCaps(false);button.setTextSize(14);button.setTextColor(filled?Color.WHITE:INK);button.setTypeface(Typeface.create("sans-serif-medium",0));button.setPadding(dp(8),0,dp(8),0);button.setMinHeight(0);button.setMinimumHeight(0);button.setMinWidth(0);button.setMinimumWidth(0);button.setStateListAnimator(null);button.setBackground(new RippleDrawable(android.content.res.ColorStateList.valueOf(filled?0x33ffffff:0x11272a25),shape(filled?INK:Color.TRANSPARENT,filled?26:12,0),null));return button;}
+ private Button button(String value,boolean filled){Button button=new Button(this);button.setText(value);button.setAllCaps(false);button.setTextSize(14);button.setTextColor(filled?Color.WHITE:INK);button.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));button.setPadding(dp(8),0,dp(8),0);button.setMinHeight(0);button.setMinimumHeight(0);button.setMinWidth(0);button.setMinimumWidth(0);button.setStateListAnimator(null);button.setBackground(new RippleDrawable(android.content.res.ColorStateList.valueOf(filled?0x33ffffff:0x11272a25),shape(filled?INK:Color.TRANSPARENT,filled?26:12,0),null));return button;}
  private int dp(int value){return Math.round(value*getResources().getDisplayMetrics().density);}
  private void message(String value){if(destroyed)return;status.setText(value);status.setVisibility(value==null||value.isEmpty()?View.GONE:View.VISIBLE);}
  private void ui(Runnable action){runOnUiThread(()->{if(!destroyed)action.run();});}
@@ -107,7 +109,7 @@ public class MainActivity extends Activity implements GenerationEngine.Listener 
  }
 
  private void choosePhoto(){if(!busy())openDocument(PHOTO,"image/*");}
- private void openDocument(int code,String type){try{Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);intent.addCategory(Intent.CATEGORY_OPENABLE);intent.setType(type);startActivityForResult(intent,code);}catch(ActivityNotFoundException error){message("未找到文件选择器，请检查系统文件应用。");}}
+ private void openDocument(int code,String type){try{Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);intent.addCategory(Intent.CATEGORY_OPENABLE);intent.setType(type);pendingPicker=code;startActivityForResult(intent,code);}catch(ActivityNotFoundException error){pendingPicker=0;message("未找到文件选择器，请检查系统文件应用。");}}
  private void begin(){
   if(busy()||photo==null)return;
   if(!ModelStore.ready(this))new AlertDialog.Builder(this).setTitle("首次需要下载轻量模型").setMessage("约 809 MB，建议连接 Wi-Fi。下载后缓存在手机中，以后可离线生成。照片在本机处理。\n\n轻量版细节低于电脑版。生成时请保持应用在前台。").setNegativeButton("暂不下载",null).setPositiveButton("下载并生成",(dialog,which)->startGeneration()).show();
@@ -118,12 +120,25 @@ public class MainActivity extends Activity implements GenerationEngine.Listener 
  @Override public void changed(GenerationEngine.State state){
   if(destroyed)return;message(state.message);progress.setVisibility(state.running?View.VISIBLE:View.GONE);
   if(state.running){boolean measured=state.total>0;progress.setIndeterminate(!measured);if(measured){progress.setProgress((int)Math.min(1000,state.bytes*1000/Math.max(1,state.total)));message(state.message+"\n"+String.format(Locale.US,"%.1f / %.1f MB",state.bytes/1000000d,state.total/1000000d));}}
-  updateControls();if(!state.running&&state.result!=null&&!state.result.equals(displayedResult)){displayedResult=state.result;loadMemory(state.result,false);}
+  updateControls();if(pendingPicker==0&&!state.running&&state.result!=null&&!state.result.equals(displayedResult)){displayedResult=state.result;loadMemory(state.result,false);}
  }
 
- @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(result!=RESULT_OK||data==null||data.getData()==null)return;Uri uri=data.getData();if(request==PHOTO)importPhoto(uri);else if(request==MODEL)importModel(uri);else if(request==OPEN)importMemory(uri);else if(request==SAVE||request==LOGS)saveTo(uri,request==SAVE?currentMemory:new File(getFilesDir(),"diagnostics.txt"));}
+ @Override protected void onActivityResult(int request,int result,Intent data){
+  super.onActivityResult(request,result,data);pendingPicker=0;
+  if(result!=RESULT_OK||data==null||data.getData()==null){restoreAfterPicker();return;}
+  Uri uri=data.getData();
+  if(request==PHOTO)importPhoto(uri);else if(request==MODEL)importModel(uri);else if(request==OPEN)importMemory(uri);
+  else if(request==SAVE||request==LOGS){saveTo(uri,new File(getFilesDir(),request==SAVE?"last-memory.still":"diagnostics.txt"));restoreAfterPicker();}
+ }
+ private void restoreAfterPicker(){restoreAfterPicker(null);}
+ private void restoreAfterPicker(String notice){
+  boolean shouldRestore=restorePickerWorkspace;restorePickerWorkspace=false;
+  if(shouldRestore&&!busy()&&currentMemory==null&&!showingExample){File latest=new File(getFilesDir(),"last-memory.still");if(latest.isFile()){loadMemory(latest,false,notice);return;}}
+  if(notice!=null)message(notice);
+  updateControls();
+ }
  private String displayName(Uri uri){try(Cursor cursor=getContentResolver().query(uri,new String[]{OpenableColumns.DISPLAY_NAME},null,null,null)){if(cursor!=null&&cursor.moveToFirst()){int index=cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);if(index>=0)return cursor.getString(index);}}catch(Exception ignored){}return "一刻记忆";}
- private void setPreparing(boolean value){preparing=value;if(value){progress.setIndeterminate(true);setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LOCKED);}else setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);updateControls();}
+ private void setPreparing(boolean value){preparing=value;if(value){progress.setIndeterminate(true);setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LOCKED);}else setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);updateControls();}
  private void importPhoto(Uri uri){
   if(busy())return;String name=displayName(uri);int ticket=++selectionTicket;setPreparing(true);message("正在准备照片…");
   files.execute(()->{
@@ -133,20 +148,21 @@ public class MainActivity extends Activity implements GenerationEngine.Listener 
     bitmap=ImageDecoder.decodeBitmap(ImageDecoder.createSource(source),(decoder,info,imageSource)->{int width=info.getSize().getWidth(),height=info.getSize().getHeight();if(width<=0||height<=0)throw new IllegalArgumentException("照片尺寸无效");float scale=Math.min(1f,1536f/Math.max(width,height));decoder.setTargetSize(Math.max(1,Math.round(width*scale)),Math.max(1,Math.round(height*scale)));decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);});
     int width=bitmap.getWidth(),height=bitmap.getHeight();try(OutputStream output=new BufferedOutputStream(new FileOutputStream(pending))){if(!bitmap.compress(Bitmap.CompressFormat.JPEG,94,output))throw new IOException("照片无法转换");}
     File selected=new File(getFilesDir(),"selected-photo.jpg");if(!pending.renameTo(selected))throw new IOException("照片未能保存");float ratio=Math.min(1f,160f/Math.max(width,height));Bitmap preview=Bitmap.createScaledBitmap(bitmap,Math.max(1,Math.round(width*ratio)),Math.max(1,Math.round(height*ratio)),true);if(preview==bitmap)bitmap=null;
-    ui(()->{if(ticket!=selectionTicket){preview.recycle();return;}photo=selected;photoTitle=MemoryFile.displayTitle(name);imageWidth=width;imageHeight=height;currentMemory=null;showingExample=false;replaceThumbnail(preview);getPreferences(0).edit().putString("photoTitle",photoTitle).putInt("photoWidth",width).putInt("photoHeight",height).apply();message("轻量版适合在手机上体验，电脑版保留更多细节。");setPreparing(false);});
-   }catch(Throwable error){ui(()->{message("照片未能打开："+shortError(error));setPreparing(false);});}finally{if(bitmap!=null)bitmap.recycle();source.delete();pending.delete();}
+    ui(()->{if(ticket!=selectionTicket){preview.recycle();return;}restorePickerWorkspace=false;photo=selected;photoTitle=MemoryFile.displayTitle(name);imageWidth=width;imageHeight=height;currentMemory=null;showingExample=false;replaceThumbnail(preview);getPreferences(0).edit().putString("photoTitle",photoTitle).putInt("photoWidth",width).putInt("photoHeight",height).apply();message("轻量版适合在手机上体验，电脑版保留更多细节。");setPreparing(false);});
+   }catch(Throwable error){ui(()->{setPreparing(false);restoreAfterPicker("照片未能打开："+shortError(error));});}finally{if(bitmap!=null)bitmap.recycle();source.delete();pending.delete();}
   });
  }
  private void replaceThumbnail(Bitmap next){thumbnail.setImageBitmap(next);Bitmap previous=thumb;thumb=next;if(previous!=null&&previous!=next)previous.recycle();}
  private void loadExample(){if(busy())return;setPreparing(true);message("正在打开示例…");files.execute(()->{try{MemoryFile.Content content=MemoryFile.example(this);ui(()->{scene.loadMemory(content.records);scene.reset();showingExample=true;currentMemory=null;replaceThumbnail(null);stageTitle.setText("示例 · "+MemoryFile.displayTitle(content.title));message("这是示例。点击下方“收藏我的照片”，就能开始。");setPreparing(false);});}catch(Throwable error){ui(()->{message("示例未能打开："+shortError(error));setPreparing(false);});}});}
- private void loadMemory(File file,boolean imported){
+ private void loadMemory(File file,boolean imported){loadMemory(file,imported,null);}
+ private void loadMemory(File file,boolean imported,String notice){
   if(preparing||destroyed)return;setPreparing(true);message("正在打开记忆…");
-  files.execute(()->{try{MemoryFile.Content content=MemoryFile.read(file);ui(()->{currentMemory=file;showingExample=false;scene.loadMemory(content.records);scene.reset();stageTitle.setText(MemoryFile.displayTitle(content.title));getPreferences(0).edit().putString("memoryTitle",content.title).apply();replaceThumbnail(null);message(imported?"记忆已打开。可以旋转、缩放，或从更多菜单保存分享。":"已收藏。可以旋转、缩放，或从更多菜单保存分享。");setPreparing(false);});}catch(Throwable error){ui(()->{currentMemory=null;message("记忆未能打开："+shortError(error));setPreparing(false);});}});
+  files.execute(()->{try{MemoryFile.Content content=MemoryFile.read(file);ui(()->{currentMemory=file;showingExample=false;scene.loadMemory(content.records);scene.reset();stageTitle.setText(MemoryFile.displayTitle(content.title));getPreferences(0).edit().putString("memoryTitle",content.title).apply();replaceThumbnail(null);message(notice!=null?notice:imported?"记忆已打开。可以旋转、缩放，或从更多菜单保存分享。":"已收藏。可以旋转、缩放，或从更多菜单保存分享。");setPreparing(false);});}catch(Throwable error){ui(()->{currentMemory=null;message("记忆未能打开："+shortError(error));setPreparing(false);});}});
  }
  private void importMemory(Uri uri){
-  if(busy())return;setPreparing(true);message("正在读取记忆文件…");files.execute(()->{File pending=new File(getFilesDir(),"import-memory.still.part");try{copyUri(uri,pending,MemoryFile.MAX_BYTES);MemoryFile.Content content=MemoryFile.read(pending);File latest=new File(getFilesDir(),"last-memory.still");if(!pending.renameTo(latest))throw new IOException("记忆文件未能保存");ui(()->{currentMemory=latest;showingExample=false;scene.loadMemory(content.records);scene.reset();stageTitle.setText(MemoryFile.displayTitle(content.title));getPreferences(0).edit().putString("memoryTitle",content.title).apply();replaceThumbnail(null);message("记忆已打开，转动看看。");setPreparing(false);});}catch(Throwable error){ui(()->{message("记忆未能打开："+shortError(error));setPreparing(false);});}finally{pending.delete();}});
+  if(busy())return;setPreparing(true);message("正在读取记忆文件…");files.execute(()->{File pending=new File(getFilesDir(),"import-memory.still.part");try{copyUri(uri,pending,MemoryFile.MAX_BYTES);MemoryFile.Content content=MemoryFile.read(pending);File latest=new File(getFilesDir(),"last-memory.still");if(!pending.renameTo(latest))throw new IOException("记忆文件未能保存");ui(()->{restorePickerWorkspace=false;currentMemory=latest;showingExample=false;scene.loadMemory(content.records);scene.reset();stageTitle.setText(MemoryFile.displayTitle(content.title));getPreferences(0).edit().putString("memoryTitle",content.title).apply();replaceThumbnail(null);message("记忆已打开，转动看看。");setPreparing(false);});}catch(Throwable error){ui(()->{setPreparing(false);restoreAfterPicker("记忆未能打开："+shortError(error));});}finally{pending.delete();}});
  }
- private void importModel(Uri uri){if(busy())return;setPreparing(true);message("正在校验并导入模型…");files.execute(()->{try{LiteModel.importPackage(getApplicationContext(),uri,value->ui(()->message(value)));ui(()->message("模型已校验并保存，可以开始本机生成。"));}catch(Throwable error){ui(()->message("模型未能导入："+shortError(error)));}finally{ui(()->setPreparing(false));}});}
+ private void importModel(Uri uri){if(busy())return;setPreparing(true);message("正在校验并导入模型…");files.execute(()->{String notice;try{LiteModel.importPackage(getApplicationContext(),uri,value->ui(()->message(value)));notice="模型已校验并保存，可以开始本机生成。";}catch(Throwable error){notice="模型未能导入："+shortError(error);}final String completed=notice;ui(()->{setPreparing(false);restoreAfterPicker(completed);});});}
  private void copyUri(Uri uri,File destination,long max)throws IOException{try(InputStream input=getContentResolver().openInputStream(uri);OutputStream output=new BufferedOutputStream(new FileOutputStream(destination))){if(input==null)throw new IOException("文件不可读取");byte[] buffer=new byte[65536];long total=0;int count;while((count=input.read(buffer))!=-1){total+=count;if(total>max)throw new IOException("文件过大，请选择较小的文件");output.write(buffer,0,count);}}}
  private String shortError(Throwable error){String value=error.getMessage();if(error instanceof OutOfMemoryError)return "可用内存不足，请换一张较小的照片。";if(value==null||value.trim().isEmpty())return "请换一个文件后再试。";return value.length()>120?value.substring(0,120)+"…":value;}
 
@@ -154,13 +170,14 @@ public class MainActivity extends Activity implements GenerationEngine.Listener 
   PopupMenu popup=new PopupMenu(this,anchor);popup.getMenu().add(0,OPEN,0,"打开记忆文件");popup.getMenu().add(0,SAVE,1,"保存记忆到文件").setEnabled(currentMemory!=null);popup.getMenu().add(0,6,2,"分享记忆文件").setEnabled(currentMemory!=null);popup.getMenu().add(0,MODEL,3,"导入离线模型包");popup.getMenu().add(0,LOGS,4,"导出诊断日志");popup.getMenu().add(0,7,5,"关于 Gemos Still");
   popup.setOnMenuItemClickListener(item->{int id=item.getItemId();if(id==OPEN)openDocument(OPEN,"*/*");else if(id==MODEL)openDocument(MODEL,"*/*");else if(id==SAVE)export(SAVE,"application/octet-stream","Gemos-Still.still");else if(id==LOGS){CrashDiagnostics.previousExit(this);export(LOGS,"text/plain","Gemos-Still-diagnostics.txt");}else if(id==6)share();else if(id==7)new AlertDialog.Builder(this).setTitle("Gemos Still").setMessage("把照片收藏成可以转动的 3D 记忆。\n\nAndroid 原生预览版 · 轻量本机模型\n内部 256 × 256，约 3.3 万个高斯粒子。电脑版保留更多细节。\n\nMade by Gemosdodo").setPositiveButton("好",null).show();return true;});popup.show();
  }
- private void export(int request,String mime,String name){try{Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT);intent.addCategory(Intent.CATEGORY_OPENABLE);intent.setType(mime);intent.putExtra(Intent.EXTRA_TITLE,name);startActivityForResult(intent,request);}catch(ActivityNotFoundException error){message("未找到系统文件保存器。");}}
+ private void export(int request,String mime,String name){try{Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT);intent.addCategory(Intent.CATEGORY_OPENABLE);intent.setType(mime);intent.putExtra(Intent.EXTRA_TITLE,name);pendingPicker=request;startActivityForResult(intent,request);}catch(ActivityNotFoundException error){pendingPicker=0;message("未找到系统文件保存器。");}}
  private void saveTo(Uri uri,File file){if(file==null||!file.isFile()){message("还没有可以保存的记忆。");return;}files.execute(()->{try(InputStream input=new BufferedInputStream(new FileInputStream(file));OutputStream output=getContentResolver().openOutputStream(uri)){if(output==null)throw new IOException("所选位置不可写入");byte[] buffer=new byte[65536];int count;while((count=input.read(buffer))!=-1)output.write(buffer,0,count);ui(()->message("已保存到你选择的位置。"));}catch(Exception error){ui(()->message("保存未完成："+shortError(error)));}});}
  private void share(){if(currentMemory==null)return;try{Intent intent=new Intent(Intent.ACTION_SEND);intent.setType("application/octet-stream");intent.putExtra(Intent.EXTRA_STREAM,MemoryProvider.uri(this));intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);startActivity(Intent.createChooser(intent,"分享这段记忆"));}catch(Exception error){message("暂时无法分享，请先保存到文件。");}}
 
  @Override protected void onResume(){super.onResume();resumed=true;if(scene!=null){scene.onResume();scene.setPaused(engine.state().running);}updateControls();}
  @Override protected void onPause(){resumed=false;if(scene!=null){scene.setPaused(true);scene.onPause();}super.onPause();}
  @Override public Object onRetainNonConfigurationInstance(){engine.detach();return engine;}
+ @Override protected void onSaveInstanceState(Bundle state){state.putInt("pendingPicker",pendingPicker);super.onSaveInstanceState(state);}
  @Override protected void onDestroy(){destroyed=true;engine.detach();if(isFinishing())engine.close();files.shutdown();if(thumb!=null){thumbnail.setImageDrawable(null);thumb.recycle();thumb=null;}super.onDestroy();}
  @Override public void onBackPressed(){if(engine.state().running){confirmCancel();return;}if(preparing){message("正在准备文件，请稍候。");return;}super.onBackPressed();}
 }
