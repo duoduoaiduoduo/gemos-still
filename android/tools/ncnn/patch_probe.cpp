@@ -1,21 +1,71 @@
 // A single original-size patch, not a complete mobile SHARP implementation.
 // Uses public ncnn APIs only. Run under an external time/memory supervisor.
 #include <net.h>
+#include <layer.h>
 #if NCNN_VULKAN
 #include <gpu.h>
 #endif
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <iomanip>
+#include <map>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <sys/resource.h>
+#include <thread>
+#include <unistd.h>
 #include <vector>
 
 using Clock = std::chrono::steady_clock;
+
+#ifdef __ANDROID__
+// The diagnostic remains bounded even if the USB connection disappears.
+// These conservative limits apply to this single-patch probe, not the app.
+class DeviceGuard {
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool stopped = false;
+    std::thread worker;
+    static long kb_field(const char* file, const char* name) {
+        std::ifstream input(file);
+        std::string line;
+        while (std::getline(input, line)) {
+            if (line.rfind(name, 0) == 0) return std::strtol(line.c_str() + std::string(name).size(), nullptr, 10);
+        }
+        return -1;
+    }
+public:
+    DeviceGuard() : worker([this] {
+        const auto began = Clock::now();
+        std::unique_lock<std::mutex> lock(mutex);
+        while (!condition.wait_for(lock, std::chrono::milliseconds(250), [this] { return stopped; })) {
+            const long rss = kb_field("/proc/self/status", "VmRSS:");
+            const long available = kb_field("/proc/meminfo", "MemAvailable:");
+            const auto elapsed = std::chrono::duration<double>(Clock::now() - began).count();
+            const char* reason = nullptr;
+            if (elapsed >= 60) reason = "wall_time_60s";
+            else if (rss > 1536L * 1024) reason = "process_rss_1536MiB";
+            else if (available >= 0 && available < 1024L * 1024) reason = "available_below_1024MiB";
+            if (reason) {
+                std::fprintf(stderr, "{\"guardStopped\":\"%s\",\"rssKiB\":%ld,\"availableKiB\":%ld}\n", reason, rss, available);
+                std::fflush(nullptr);
+                std::_Exit(124); // The OS releases only this diagnostic's resources.
+            }
+        }
+    }) {}
+    ~DeviceGuard() {
+        { std::lock_guard<std::mutex> lock(mutex); stopped = true; }
+        condition.notify_all();
+        worker.join();
+    }
+};
+#endif
 
 static double seconds(Clock::time_point began) {
     return std::chrono::duration<double>(Clock::now() - began).count();
@@ -107,6 +157,12 @@ static int probe(int argc, char** argv) {
     check(net.load_param(argv[1]), "load_param");
     phase("load_weights", began);
     check(net.load_model(argv[2]), "load_model");
+    std::map<std::string, int> cpuOnlyTypes;
+    size_t vulkanCapable = 0;
+    for (const ncnn::Layer* layer : net.layers()) {
+        if (layer->support_vulkan) ++vulkanCapable;
+        else ++cpuOnlyTypes[layer->type];
+    }
     phase("inference", began);
     const double initialized = seconds(began);
     ncnn::Extractor extractor = net.create_extractor();
@@ -114,7 +170,15 @@ static int probe(int argc, char** argv) {
     std::ofstream report(std::string(argv[4]) + ".json", std::ios::trunc);
     if (!report) throw std::runtime_error("Cannot open report");
     report << std::setprecision(10) << "{\"backendRequested\":\"" << backend
-           << "\",\"gpuLayerCoverage\":\"notMeasured\",\"precisionStorageRequested\":\"" << precision
+           << "\",\"gpuLayerCoverage\":\"capabilityFlagsOnly_notExecutionTrace\",\"vulkanCapableLayers\":" << vulkanCapable
+           << ",\"layerCount\":" << net.layers().size() << ",\"cpuOnlyLayerTypes\":{";
+    bool firstType = true;
+    for (const auto& entry : cpuOnlyTypes) {
+        if (!firstType) report << ',';
+        report << '"' << entry.first << "\":" << entry.second;
+        firstType = false;
+    }
+    report << "},\"precisionStorageRequested\":\"" << precision
            << "\",\"fp16Arithmetic\":false,\"cpuThreads\":2,\"runs\":1,\"inputShape\":[1,3,384,384],\"outputs\":{";
     // Capture intermediate outputs before final to avoid re-running freed trunks.
     const std::array<const char*, 3> names{{"out1", "out2", "out0"}};
@@ -135,6 +199,11 @@ static int probe(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
+    std::printf("{\"probePid\":%ld}\n", static_cast<long>(getpid()));
+    std::fflush(stdout);
+#ifdef __ANDROID__
+    DeviceGuard guard;
+#endif
     try { return probe(argc, argv); }
     catch (const std::exception& error) {
         std::fprintf(stderr, "Original patch probe failed: %s\n", error.what());
