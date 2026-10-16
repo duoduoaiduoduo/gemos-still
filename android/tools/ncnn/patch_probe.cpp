@@ -123,17 +123,25 @@ static void write_output(const std::string& prefix, const char* name,
 }
 
 static int probe(int argc, char** argv) {
-    if (argc < 7 || argc > 9) {
-        std::fprintf(stderr, "Usage: gemos-patch-probe PARAM BIN INPUT.f32 OUTPUT_PREFIX cpu|vulkan fp32|fp16 [--image-only|--tap-tail] [--tail-layernorm-cpu|--layernorm-cpu]\n");
+    if (argc < 7) {
+        std::fprintf(stderr, "Usage: gemos-patch-probe PARAM BIN INPUT.f32 OUTPUT_PREFIX cpu|vulkan fp32|fp16 [--image-only|--tap-tail] [--tail-layernorm-cpu|--layernorm-cpu] [--repeat=1|2|3]\n");
         return 2;
     }
     bool tapTail = false, tailLayernormCpu = false, layernormCpu = false, imageOnly = false;
+    int repeats = 1;
+    bool repeatSpecified = false;
     for (int i = 7; i < argc; ++i) {
         const std::string flag = argv[i];
         if (flag == "--tap-tail") tapTail = true;
         else if (flag == "--tail-layernorm-cpu") tailLayernormCpu = true;
         else if (flag == "--layernorm-cpu") layernormCpu = true;
         else if (flag == "--image-only") imageOnly = true;
+        else if (flag.rfind("--repeat=", 0) == 0) {
+            if (repeatSpecified || (flag != "--repeat=1" && flag != "--repeat=2" && flag != "--repeat=3"))
+                throw std::runtime_error("Repeat must be specified once and be 1, 2, or 3");
+            repeats = flag.back() - '0';
+            repeatSpecified = true;
+        }
         else throw std::runtime_error("Unknown diagnostic option");
     }
     if (tailLayernormCpu && layernormCpu) throw std::runtime_error("Choose one normalization policy");
@@ -192,8 +200,6 @@ static int probe(int argc, char** argv) {
     }
     phase("inference", began);
     const double initialized = seconds(began);
-    ncnn::Extractor extractor = net.create_extractor();
-    check(extractor.input("in0", ncnn::Mat(384, 384, 3, input.data())), "input");
     std::ofstream report(std::string(argv[4]) + ".json", std::ios::trunc);
     if (!report) throw std::runtime_error("Cannot open report");
     report << std::setprecision(10) << "{\"backendRequested\":\"" << backend
@@ -209,23 +215,47 @@ static int probe(int argc, char** argv) {
            << ",\"allLayernormCpu\":" << (layernormCpu ? "true" : "false")
            << ",\"imageEncoderOnly\":" << (imageOnly ? "true" : "false")
            << ",\"precisionStorageRequested\":\"" << precision
-           << "\",\"fp16Arithmetic\":false,\"cpuThreads\":2,\"runs\":1,\"inputShape\":[1,3,384,384],\"outputs\":{";
+           << "\",\"fp16Arithmetic\":false,\"cpuThreads\":2,\"runs\":" << repeats
+           << ",\"inputShape\":[1,3,384,384],";
     // Capture intermediate outputs before final to avoid re-running freed trunks.
     std::vector<const char*> names;
     if (!imageOnly) names = {"out1", "out2"};
     if (tapTail) names.insert(names.end(), {"681", "682", "683", "684"});
     names.push_back("out0");
-    for (size_t i = 0; i < names.size(); ++i) {
-        ncnn::Mat output;
-        check(extractor.extract(names[i], output), names[i]);
-        if (i) report << ',';
-        const std::string name = names[i];
-        const bool grid = name == "out0" || name == "683" || name == "684";
-        write_output(argv[4], names[i], output, grid ? 1024 * 24 * 24 : 577 * 1024, report);
-        phase(names[i], began);
+    if (repeats > 1)
+        report << "\"repeatInputPolicy\":\"single_immutable_host_buffer_new_extractor_each_run\",\"iterations\":[";
+    for (int run = 0; run < repeats; ++run) {
+        const auto runBegan = Clock::now();
+        const std::string prefix = repeats == 1 ? std::string(argv[4]) : std::string(argv[4]) + ".r" + std::to_string(run);
+        if (repeats > 1) {
+            if (run) report << ',';
+            report << "{\"run\":" << run << ",\"outputSuffix\":\".r" << run << "\",";
+        }
+        report << "\"outputs\":{";
+        // Match the pyramid probe's lifetime exactly: a new Extractor per patch,
+        // with every host result consumed before destruction. The input vector is
+        // deliberately neither replaced nor written between diagnostic rounds.
+        {
+            ncnn::Extractor extractor = net.create_extractor();
+            check(extractor.input("in0", ncnn::Mat(384, 384, 3, input.data())), "input");
+            for (size_t i = 0; i < names.size(); ++i) {
+                ncnn::Mat output;
+                check(extractor.extract(names[i], output), names[i]);
+                if (i) report << ',';
+                const std::string name = names[i];
+                const bool grid = name == "out0" || name == "683" || name == "684";
+                write_output(prefix, names[i], output, grid ? 1024 * 24 * 24 : 577 * 1024, report);
+                const std::string label = repeats == 1 ? name : "r" + std::to_string(run) + "_" + name;
+                phase(label.c_str(), began);
+            }
+        }
+        report << '}';
+        if (repeats > 1)
+            report << ",\"inferenceSeconds\":" << seconds(runBegan) << ",\"peakRssBytes\":" << peak_rss_bytes() << '}';
     }
+    if (repeats > 1) report << ']';
     const double completed = seconds(began);
-    report << "},\"initializeSeconds\":" << initialized << ",\"inferenceSeconds\":" << completed - initialized
+    report << ",\"initializeSeconds\":" << initialized << ",\"inferenceSeconds\":" << completed - initialized
            << ",\"elapsedSeconds\":" << completed << ",\"peakRssBytes\":" << peak_rss_bytes()
            << ",\"status\":\"finite_outputs\"}\n";
     if (!report) throw std::runtime_error("Report write failed");
