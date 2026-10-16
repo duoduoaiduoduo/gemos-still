@@ -124,18 +124,20 @@ static void write_output(const std::string& prefix, const char* name,
 
 static int probe(int argc, char** argv) {
     if (argc < 7 || argc > 9) {
-        std::fprintf(stderr, "Usage: gemos-patch-probe PARAM BIN INPUT.f32 OUTPUT_PREFIX cpu|vulkan fp32|fp16 [--tap-tail] [--tail-layernorm-cpu|--layernorm-cpu]\n");
+        std::fprintf(stderr, "Usage: gemos-patch-probe PARAM BIN INPUT.f32 OUTPUT_PREFIX cpu|vulkan fp32|fp16 [--image-only|--tap-tail] [--tail-layernorm-cpu|--layernorm-cpu]\n");
         return 2;
     }
-    bool tapTail = false, tailLayernormCpu = false, layernormCpu = false;
+    bool tapTail = false, tailLayernormCpu = false, layernormCpu = false, imageOnly = false;
     for (int i = 7; i < argc; ++i) {
         const std::string flag = argv[i];
         if (flag == "--tap-tail") tapTail = true;
         else if (flag == "--tail-layernorm-cpu") tailLayernormCpu = true;
         else if (flag == "--layernorm-cpu") layernormCpu = true;
+        else if (flag == "--image-only") imageOnly = true;
         else throw std::runtime_error("Unknown diagnostic option");
     }
     if (tailLayernormCpu && layernormCpu) throw std::runtime_error("Choose one normalization policy");
+    if (imageOnly && (tapTail || tailLayernormCpu)) throw std::runtime_error("Image encoder exposes only its original final grid");
     const std::string backend = argv[5], precision = argv[6];
     if (backend != "cpu" && backend != "vulkan") throw std::runtime_error("Unknown backend");
     if (precision != "fp32" && precision != "fp16") throw std::runtime_error("Unknown precision");
@@ -205,10 +207,12 @@ static int probe(int argc, char** argv) {
     }
     report << "},\"tailLayernormCpu\":" << (tailLayernormCpu ? "true" : "false")
            << ",\"allLayernormCpu\":" << (layernormCpu ? "true" : "false")
+           << ",\"imageEncoderOnly\":" << (imageOnly ? "true" : "false")
            << ",\"precisionStorageRequested\":\"" << precision
            << "\",\"fp16Arithmetic\":false,\"cpuThreads\":2,\"runs\":1,\"inputShape\":[1,3,384,384],\"outputs\":{";
     // Capture intermediate outputs before final to avoid re-running freed trunks.
-    std::vector<const char*> names{"out1", "out2"};
+    std::vector<const char*> names;
+    if (!imageOnly) names = {"out1", "out2"};
     if (tapTail) names.insert(names.end(), {"681", "682", "683", "684"});
     names.push_back("out0");
     for (size_t i = 0; i < names.size(); ++i) {

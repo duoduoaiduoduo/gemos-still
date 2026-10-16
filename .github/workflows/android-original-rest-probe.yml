@@ -1,0 +1,113 @@
+name: Original SHARP Android OpenCL rest probe
+on:
+  workflow_dispatch:
+  push:
+    paths: ['android/tools/mnn/**', '.github/workflows/android-original-rest-probe.yml']
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch the reviewed MNN revision
+        run: |
+          git init third-party-mnn
+          git -C third-party-mnn remote add origin https://github.com/alibaba/MNN.git
+          git -C third-party-mnn fetch --depth 1 origin dbf9ba61b08106a3b43426e295d1a29cb41cc8fe
+          git -C third-party-mnn checkout --detach FETCH_HEAD
+          test "$(git -C third-party-mnn rev-parse HEAD)" = dbf9ba61b08106a3b43426e295d1a29cb41cc8fe
+      - name: Restrict only the CI source copy to the public OpenCL library
+        run: |
+          python3 android/tools/mnn/restrict_public_opencl.py third-party-mnn
+      - name: Locate the runner's existing Android NDK
+        run: |
+          task_ndk_dir=$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)
+          test -n "$task_ndk_dir"
+          test -f "$task_ndk_dir/build/cmake/android.toolchain.cmake"
+          echo "GEMOS_PROBE_NDK=$task_ndk_dir" >> "$GITHUB_ENV"
+      - name: Build one MNN shared library with OpenCL and low-memory support
+        run: |
+          cmake -S third-party-mnn -B build-rest-mnn -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$GEMOS_PROBE_NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-28 \
+            -DANDROID_STL=c++_shared -DCMAKE_BUILD_TYPE=Release \
+            -DMNN_BUILD_SHARED_LIBS=ON -DMNN_SEP_BUILD=OFF \
+            -DMNN_OPENCL=ON -DMNN_OPENCL_SIZE_CUT=OFF -DMNN_LOW_MEMORY=ON \
+            -DMNN_USE_SYSTEM_LIB=OFF -DMNN_ARM82=ON -DMNN_OPENMP=OFF \
+            -DMNN_METAL=OFF -DMNN_VULKAN=OFF -DMNN_OPENGL=OFF \
+            -DMNN_BUILD_CONVERTER=OFF -DMNN_BUILD_TRAIN=OFF \
+            -DMNN_BUILD_TOOLS=OFF -DMNN_BUILD_TEST=OFF -DMNN_BUILD_BENCHMARK=OFF \
+            -DMNN_BUILD_QUANTOOLS=OFF -DMNN_EVALUATION=OFF -DMNN_BUILD_DEMO=OFF \
+            -DMNN_BUILD_LLM=OFF -DMNN_BUILD_AUDIO=OFF -DMNN_BUILD_OPENCV=OFF \
+            -DMNN_JNI=OFF -DMNN_INTERNAL=OFF -DMNN_BUILD_FOR_ANDROID_COMMAND=ON \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            '-DCMAKE_BUILD_RPATH=$ORIGIN' '-DCMAKE_INSTALL_RPATH=$ORIGIN'
+          cmake --build build-rest-mnn --target MNN -j 2
+      - name: Build the ordinary ARM64 diagnostic executable
+        run: |
+          cmake -S android/tools/mnn -B build-rest-cli -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$GEMOS_PROBE_NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-28 \
+            -DANDROID_STL=c++_shared -DCMAKE_BUILD_TYPE=Release \
+            -DMNN_SOURCE_DIR="$GITHUB_WORKSPACE/third-party-mnn" \
+            -DMNN_LIBRARY="$GITHUB_WORKSPACE/build-rest-mnn/libMNN.so"
+          cmake --build build-rest-cli -j 2
+      - name: Package runtimes and complete license notices
+        run: |
+          mkdir -p rest-probe-arm64
+          cp build-rest-cli/gemos-rest-probe rest-probe-arm64/
+          cp build-rest-mnn/libMNN.so rest-probe-arm64/
+          cp "$GEMOS_PROBE_NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" rest-probe-arm64/
+          cp android/tools/mnn/USAGE.txt rest-probe-arm64/
+          cp third-party-mnn/LICENSE.txt rest-probe-arm64/LICENSE.MNN.txt
+          cp third-party-mnn/3rd_party/flatbuffers/LICENSE.txt rest-probe-arm64/LICENSE.flatbuffers.txt
+          cp third-party-mnn/3rd_party/half/LICENSE.txt rest-probe-arm64/LICENSE.half.txt
+          cp third-party-mnn/3rd_party/lic/tensorflow_license rest-probe-arm64/LICENSE.tensorflow.txt
+          cp third-party-mnn/3rd_party/lic/skia_license rest-probe-arm64/LICENSE.skia.txt
+          cp "$GEMOS_PROBE_NDK/NOTICE" rest-probe-arm64/LICENSE.Android-NDK.txt
+          if [ -f "$GEMOS_PROBE_NDK/NOTICE.toolchain" ]; then
+            cp "$GEMOS_PROBE_NDK/NOTICE.toolchain" rest-probe-arm64/LICENSE.Android-NDK-toolchain.txt
+          fi
+          git -C third-party-mnn diff -- source/backend/opencl/core/runtime/OpenCLWrapper.cpp > rest-probe-arm64/MNN-public-opencl-loader.patch
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, os
+          bundle=Path('rest-probe-arm64')
+          header=Path('third-party-mnn/3rd_party/OpenCLHeaders/CL/cl.h').read_text()
+          (bundle/'LICENSE.OpenCL-Headers.txt').write_text(header.split('*/',1)[0]+'*/\n')
+          (bundle/'THIRD-PARTY-NOTICES.txt').write_text(
+              'MNN 3.6.1, Alibaba Group: Apache-2.0; pinned revision dbf9ba61b08106a3b43426e295d1a29cb41cc8fe.\n'
+              'Modified only its Android OpenCL loader candidate list in this CI source copy; see attached patch.\n'
+              'FlatBuffers: Apache-2.0. Half: MIT, Christian Rau. OpenCL headers: Khronos permission notice.\n'
+              'Included MNN-derived TensorFlow/Skia notices and Android NDK/libc++ toolchain notices.\n'
+              'This bundle includes no GPU driver, model weights, photos, or private device information.\n')
+          info={'mnnRevision':'dbf9ba61b08106a3b43426e295d1a29cb41cc8fe','abi':'arm64-v8a',
+                'minAndroidApi':28,'opencl':True,'openclLibraryPolicy':'public libOpenCL.so name only',
+                'lowMemory':True,'separateOpenclLibrary':False,'stl':'c++_shared',
+                'openclModeBits':65,'openclMemory':'buffer','openclPrecision':'Normal_fp16_storage_fp32_compute',
+                'guardWallSeconds':60,'guardRssMiB':1536,'guardAvailableMiB':1024,
+                'buildOnly':True,'noAutomaticDeviceExecution':True,
+                'ndkSourceProperties':(Path(os.environ['GEMOS_PROBE_NDK'])/'source.properties').read_text()}
+          (bundle/'BUILD-INFO.json').write_text(json.dumps(info,indent=2)+'\n')
+          PY
+      - name: Verify shared-library loading paths and dependencies
+        run: |
+          "$GEMOS_PROBE_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -d rest-probe-arm64/gemos-rest-probe > rest-probe-arm64/executable-elf.txt
+          "$GEMOS_PROBE_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -d rest-probe-arm64/libMNN.so > rest-probe-arm64/mnn-elf.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          for name in ['executable-elf.txt','mnn-elf.txt']:
+              text=(Path('rest-probe-arm64')/name).read_text()
+              assert any('$ORIGIN' in line and ('RUNPATH' in line or 'RPATH' in line) for line in text.splitlines()),name
+              assert not any('NEEDED' in line and 'libOpenCL.so' in line for line in text.splitlines()),name
+          PY
+          cd rest-probe-arm64
+          sha256sum gemos-rest-probe libMNN.so libc++_shared.so > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Gemos-original-rest-probe-arm64
+          path: rest-probe-arm64/
+          if-no-files-found: error
+          retention-days: 14

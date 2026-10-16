@@ -1,0 +1,59 @@
+Gemos Still: original-resolution SHARP rest-stage diagnostic
+
+This is an ordinary ARM64 Android shell executable, not an APK or production
+inference engine. Building does not install or run anything on a phone. Model
+weights, photos, feature tensors, and private device identifiers are not included.
+
+Pinned MNN: dbf9ba61b08106a3b43426e295d1a29cb41cc8fe (3.6.1)
+The build includes OpenCL in one libMNN.so. Keep gemos-rest-probe, libMNN.so,
+and libc++_shared.so together. Their RUNPATH is $ORIGIN. Preserve LICENSE.*
+and THIRD-PARTY-NOTICES.txt when distributing the diagnostic bundle.
+
+Capability query, without loading a model:
+  ./gemos-rest-probe --backend opencl --capabilities-only
+
+One inference, after a separate reviewed memory/temperature admission:
+  ./gemos-rest-probe --backend opencl --model MODEL.mnn \
+    --weights MODEL.mnn.weight --inputs INPUT_DIRECTORY --output OUTPUT_DIRECTORY
+
+CPU comparison uses --backend cpu. It retains the same conservative Android
+limits and is not permission to attempt the known multi-gigabyte CPU pipeline.
+
+Inputs are exactly eight little-endian float32 files, in NCHW layout:
+  image.f32            [1,3,1536,1536], RGB [0,1]
+  disparity_factor.f32 [1]
+  spn_latent0.f32      [1,1024,96,96]
+  spn_latent1.f32      [1,1024,96,96]
+  spn_high.f32         [1,1024,96,96]
+  spn_middle.f32       [1,1024,48,48]
+  spn_low.f32          [1,1024,24,24]
+  spn_image_global.f32 [1,1024,24,24]
+The six features must come from the original 384px ViTs and original overlapping
+pyramid merge, before the SPN upsample modules. The model remains 1536px and
+produces 1,179,648 Gaussians. Arbitrary renamed tensors are not interchangeable.
+
+The Android watchdog exits only this diagnostic process after 60 seconds, RSS
+above 1536 MiB, or system MemAvailable below 1024 MiB. An external host watchdog
+and current device admission are still required: GPU memory may not appear in
+process RSS. There is no root, flashing, private namespace, or device setting API.
+
+Only the public libOpenCL.so name is loaded. The CI source-copy patch removes
+MNN's other Android driver names/absolute paths. If public OpenCL is unavailable,
+the executable reports failure instead of trying a private driver or CPU.
+
+Backend reports inspect the actual created MNN Execution objects, using read-only
+internal headers from the exact pinned revision. Whole-session CPU fallback or
+CPU Conv/Deconv/MatMul is rejected before inference in OpenCL mode. Small CPU
+shape/reduction/normalization operations are explicitly reported as hybrid; a
+hybrid run is never labelled a fully GPU run. Completed operator backend counts
+are reported separately from the planned execution coverage.
+
+OpenCL explicitly requests BUFFER memory and disables tuning (mode bits 65).
+Precision_Normal (0) in this pinned source uses FP16 storage and FP32 COMPUTE_FLOAT;
+pure FP16 arithmetic is not requested. Actual input CL_MEM_TYPE is queried through
+the public OpenCL API, with its CL_MEM_CONTEXT checked against the admitted GPU.
+
+Outputs contain five raw float32 tensors and report.json. A finite result alone
+does not prove correctness. Compare against the original desktop output, inspect
+memory and temperature, and stop before any production integration if these
+checks fail. No automatic retry or warmup inference is performed.
