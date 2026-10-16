@@ -1,0 +1,22 @@
+Reference implementation: Gemos Still Web neon-cube/prepare_memory.py
+Algorithm: ray-depth-contrast-v2, original projective depth Jacobian, saliency framing.
+Generator: private workspace outputs/android/quality-study-20261016/make_display_contract_fixtures.py
+
+Both binary fixtures are deterministic synthetic Gaussian fields. Neither
+contains a photograph, photo-derived Gaussian data, or model weights.
+
+The generator constructs calibrated, anisotropic, rotated synthetic Gaussians,
+uses Apple's official unproject_gaussians/save_ply, and invokes the real existing
+Python prepare_memory.prepare. Expected records come directly from its output.
+
+- gaussian-display-synthetic-v2.bin: 3072 input points; test full analysis,
+  saliency, depth compression, covariance Jacobian, clipping and 257-point sampling.
+- gaussian-display-full-scene-100-v2.bin: 1,179,648 synthetic points analyzed by
+  the Python oracle; 100 uniformly selected oracle output samples with global
+  reference/focus statistics test positions, anisotropic covariance and flags.
+
+Binary headers are little endian: magic 0x47534432; kind; width; height; input
+count; display limit; expected count; adaptive flag (8 uint32), then focal px
+(float64). Inputs have 14 floats: mean3, scale3, quaternion4, linearRGB3, alpha.
+Expected memorygs records have the standard 16 floats. The full-scene fixture
+also stores global analysis context and the sampled saliency weights.
