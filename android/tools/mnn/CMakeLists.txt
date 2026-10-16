@@ -17,6 +17,14 @@ target_include_directories(gemos-rest-probe SYSTEM PRIVATE
   "${MNN_SOURCE_DIR}/3rd_party/half"
   "${MNN_SOURCE_DIR}/3rd_party/OpenCLHeaders")
 target_link_libraries(gemos-rest-probe PRIVATE "${MNN_LIBRARY}" ${CMAKE_DL_LIBS})
+if(ANDROID)
+  # CMake's Android platform module clears the implicit runtime-path flag.
+  # Bypass that property machinery with explicit ELF linker arguments. CMake
+  # escapes the literal dollar through Ninja and the shell, not the environment.
+  target_link_options(gemos-rest-probe PRIVATE
+    "LINKER:--enable-new-dtags"
+    "LINKER:-rpath,\$ORIGIN")
+endif()
 set_target_properties(gemos-rest-probe PROPERTIES
   BUILD_WITH_INSTALL_RPATH TRUE
   BUILD_RPATH "\$ORIGIN"

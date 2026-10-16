@@ -37,7 +37,7 @@ jobs:
           path: |
             build-rest-mnn/libMNN.so
             build-rest-mnn/runtime-SHA256SUMS.txt
-          key: mnn-rest-runtime-v1-${{ runner.os }}-${{ runner.arch }}-dbf9ba61b08106a3b43426e295d1a29cb41cc8fe-ndk${{ steps.ndk.outputs.version }}-arm64-api28-cxxshared-${{ hashFiles('.github/workflows/android-original-rest-probe.yml', 'android/tools/mnn/restrict_public_opencl.py') }}
+          key: mnn-rest-runtime-v1-${{ runner.os }}-${{ runner.arch }}-dbf9ba61b08106a3b43426e295d1a29cb41cc8fe-ndk${{ steps.ndk.outputs.version }}-arm64-api28-cxxshared-${{ hashFiles('.github/workflows/android-original-rest-probe.yml', 'android/tools/mnn/restrict_public_opencl.py', 'android/tools/mnn/android_runpath.cmake') }}
       - name: Build one MNN shared library with OpenCL and low-memory support
         if: steps.runtime-cache.outputs.cache-hit != 'true'
         run: |
@@ -54,6 +54,7 @@ jobs:
             -DMNN_BUILD_QUANTOOLS=OFF -DMNN_EVALUATION=OFF -DMNN_BUILD_DEMO=OFF \
             -DMNN_BUILD_LLM=OFF -DMNN_BUILD_AUDIO=OFF -DMNN_BUILD_OPENCV=OFF \
             -DMNN_JNI=OFF -DMNN_INTERNAL=OFF -DMNN_BUILD_FOR_ANDROID_COMMAND=ON \
+            -DCMAKE_PROJECT_MNN_INCLUDE="$GITHUB_WORKSPACE/android/tools/mnn/android_runpath.cmake" \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             '-DCMAKE_BUILD_RPATH=$ORIGIN' '-DCMAKE_INSTALL_RPATH=$ORIGIN'
           cmake --build build-rest-mnn --target MNN -j 2
@@ -116,6 +117,7 @@ jobs:
                 'stages':['rest','depth','gaussian'],'stageDefault':'rest',
                 'stageInputs':{'rest':8,'depth':6,'gaussian':9},
                 'guardWallSeconds':60,'guardRssMiB':1536,'guardAvailableMiB':1024,
+                'elfRunpath':'$ORIGIN','explicitAndroidElfLinkerRunpath':True,
                 'buildOnly':True,'noAutomaticDeviceExecution':True,
                 'ndkSourceProperties':(Path(os.environ['GEMOS_PROBE_NDK'])/'source.properties').read_text()}
           (bundle/'BUILD-INFO.json').write_text(json.dumps(info,indent=2)+'\n')
@@ -126,9 +128,11 @@ jobs:
           "$GEMOS_PROBE_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -d rest-probe-arm64/libMNN.so > rest-probe-arm64/mnn-elf.txt
           python3 - <<'PY'
           from pathlib import Path
+          import re
           for name in ['executable-elf.txt','mnn-elf.txt']:
               text=(Path('rest-probe-arm64')/name).read_text()
-              assert any('$ORIGIN' in line and ('RUNPATH' in line or 'RPATH' in line) for line in text.splitlines()),name
+              runpaths=[match.group(1) for match in re.finditer(r'\((?:RUNPATH|RPATH)\).*?\[([^\]]*)\]',text)]
+              assert runpaths and all(value == '$ORIGIN' for value in runpaths),(name,runpaths)
               assert not any('NEEDED' in line and 'libOpenCL.so' in line for line in text.splitlines()),name
           PY
           cd rest-probe-arm64
