@@ -118,10 +118,12 @@ static void write_output(const std::string& prefix, const char* name,
 }
 
 static int probe(int argc, char** argv) {
-    if (argc != 7) {
-        std::fprintf(stderr, "Usage: gemos-patch-probe PARAM BIN INPUT.f32 OUTPUT_PREFIX cpu|vulkan fp32|fp16\n");
+    if (argc != 7 && argc != 8) {
+        std::fprintf(stderr, "Usage: gemos-patch-probe PARAM BIN INPUT.f32 OUTPUT_PREFIX cpu|vulkan fp32|fp16 [--tap-tail]\n");
         return 2;
     }
+    const bool tapTail = argc == 8 && std::string(argv[7]) == "--tap-tail";
+    if (argc == 8 && !tapTail) throw std::runtime_error("Unknown diagnostic option");
     const std::string backend = argv[5], precision = argv[6];
     if (backend != "cpu" && backend != "vulkan") throw std::runtime_error("Unknown backend");
     if (precision != "fp32" && precision != "fp16") throw std::runtime_error("Unknown precision");
@@ -181,12 +183,16 @@ static int probe(int argc, char** argv) {
     report << "},\"precisionStorageRequested\":\"" << precision
            << "\",\"fp16Arithmetic\":false,\"cpuThreads\":2,\"runs\":1,\"inputShape\":[1,3,384,384],\"outputs\":{";
     // Capture intermediate outputs before final to avoid re-running freed trunks.
-    const std::array<const char*, 3> names{{"out1", "out2", "out0"}};
+    std::vector<const char*> names{"out1", "out2"};
+    if (tapTail) names.insert(names.end(), {"681", "682", "683", "684"});
+    names.push_back("out0");
     for (size_t i = 0; i < names.size(); ++i) {
         ncnn::Mat output;
         check(extractor.extract(names[i], output), names[i]);
         if (i) report << ',';
-        write_output(argv[4], names[i], output, names[i] == std::string("out0") ? 1024 * 24 * 24 : 577 * 1024, report);
+        const std::string name = names[i];
+        const bool grid = name == "out0" || name == "683" || name == "684";
+        write_output(argv[4], names[i], output, grid ? 1024 * 24 * 24 : 577 * 1024, report);
         phase(names[i], began);
     }
     const double completed = seconds(began);
