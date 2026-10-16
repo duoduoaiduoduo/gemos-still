@@ -4,18 +4,13 @@
 #include <MNN/Tensor.hpp>
 #include "core/Session.hpp"
 #include <CL/cl.h>
-#if !defined(__APPLE__)
-#define CL_HPP_TARGET_OPENCL_VERSION 110
-#define CL_HPP_MINIMUM_OPENCL_VERSION 110
-#include <CL/cl.hpp>
-#endif
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <filesystem>
@@ -36,14 +31,31 @@
 using Clock=std::chrono::steady_clock;
 static constexpr const char* kMnnRevision="dbf9ba61b08106a3b43426e295d1a29cb41cc8fe";
 static constexpr size_t kGaussians=1179648;
-static constexpr size_t kWeightBytes=93184376;
 struct InputSpec { const char* name; std::vector<int> shape; };
-static const std::array<InputSpec,8> kInputs{{
-    {"image",{1,3,1536,1536}}, {"disparity_factor",{1}},
+struct StageSpec {
+    const char* name;size_t model_bytes,weight_bytes,gaussians;
+    std::vector<InputSpec> inputs,outputs;
+};
+static const std::vector<InputSpec> kFeatures{
     {"spn_latent0",{1,1024,96,96}}, {"spn_latent1",{1,1024,96,96}},
     {"spn_high",{1,1024,96,96}}, {"spn_middle",{1,1024,48,48}},
     {"spn_low",{1,1024,24,24}}, {"spn_image_global",{1,1024,24,24}}
-}};
+};
+static const std::vector<InputSpec> kGaussianOutputs{
+    {"mean_vectors_ndc",{1,1179648,3}}, {"singular_values_ndc",{1,1179648,3}},
+    {"quaternions_ndc",{1,1179648,4}}, {"colors",{1,1179648,3}}, {"opacities",{1,1179648}}
+};
+static const std::map<std::string,StageSpec> kStages=[] {
+    auto rest_inputs=std::vector<InputSpec>{{"image",{1,3,1536,1536}},{"disparity_factor",{1}}};
+    rest_inputs.insert(rest_inputs.end(),kFeatures.begin(),kFeatures.end());
+    auto gaussian_inputs=rest_inputs;
+    gaussian_inputs.push_back({"clamped_monodepth_disparity",{1,2,1536,1536}});
+    return std::map<std::string,StageSpec>{
+        {"rest",{"rest",9504520,93184376,kGaussians,rest_inputs,kGaussianOutputs}},
+        {"depth",{"depth",17656,78195976,0,kFeatures,{{"clamped_monodepth_disparity",{1,2,1536,1536}}}}},
+        {"gaussian",{"gaussian",9493192,55394416,kGaussians,gaussian_inputs,kGaussianOutputs}}
+    };
+}();
 static std::string quote(const std::string& value) {
     std::ostringstream out;out << '"';
     for(unsigned char ch:value) {
@@ -55,6 +67,22 @@ static std::string quote(const std::string& value) {
         else out << ch;
     }
     return out.str()+'"';
+}
+static std::string specs_json(const std::vector<InputSpec>& specs) {
+    std::ostringstream out;out << '[';bool first=true;
+    for(const auto& spec:specs) {
+        if(!first) out << ',';first=false;
+        out << "{\"name\":" << quote(spec.name) << ",\"file\":" << quote(std::string(spec.name)+".f32") << ",\"shape\":[";
+        size_t elements=1;
+        for(size_t axis=0;axis<spec.shape.size();++axis) {if(axis) out << ',';out << spec.shape[axis];elements*=spec.shape[axis];}
+        out << "],\"bytes\":" << elements*sizeof(float) << ",\"dtype\":\"little-endian-float32\",\"layout\":\"NCHW\"}";
+    }
+    return out.str()+']';
+}
+static std::string stage_json(const StageSpec& stage) {
+    return "{\"stage\":"+quote(stage.name)+",\"modelBytes\":"+std::to_string(stage.model_bytes)+
+        ",\"weightBytes\":"+std::to_string(stage.weight_bytes)+",\"gaussians\":"+std::to_string(stage.gaussians)+
+        ",\"inputs\":"+specs_json(stage.inputs)+",\"outputs\":"+specs_json(stage.outputs)+'}';
 }
 static double seconds(Clock::time_point start) { return std::chrono::duration<double>(Clock::now()-start).count(); }
 static void phase(const char* name,Clock::time_point start) {
@@ -146,10 +174,14 @@ struct PublicOpenCL {
         if(!info || !tensor->deviceId()) throw std::runtime_error("Cannot query the actual public OpenCL memory object");
         // In this pinned MNN backend, normal tensor deviceId is a cl::Buffer*
         // or cl::Image2D*. Both inherit this public Khronos cl::Memory wrapper.
-        // Read only its documented cl_mem handle; no private driver structure.
-        static_assert(sizeof(cl::Memory)==sizeof(cl_mem),"Unexpected Khronos wrapper layout");
-        const auto* memory=reinterpret_cast<const cl::Memory*>(tensor->deviceId());
-        cl_mem object=(*memory)();cl_mem_object_type type=0;
+        // Pinned cl.hpp:1792-1868, Wrapper<cl_mem> has a single first data
+        // member cl_mem object_; Memory/Buffer add no data or virtual bases.
+        // Borrow those pointer bytes only. Do not instantiate a wrapper or own,
+        // retain, release or destroy it. Including cl.hpp itself would create
+        // default Context/Queue destructors requiring static OpenCL symbols.
+        cl_mem object=nullptr;
+        std::memcpy(&object,reinterpret_cast<const void*>(tensor->deviceId()),sizeof(object));
+        cl_mem_object_type type=0;
         if(info(object,CL_MEM_TYPE,sizeof(type),&type,nullptr)!=CL_SUCCESS ||
            info(object,CL_MEM_SIZE,sizeof(bytes),&bytes,nullptr)!=CL_SUCCESS)
             throw std::runtime_error("Public clGetMemObjectInfo failed");
@@ -188,9 +220,9 @@ struct PublicOpenCL {
         return value+",\"maxImage2DWidth\":"+std::to_string(max_image_width)+",\"maxImage2DHeight\":"+std::to_string(max_image_height)+"}";
     }
 };
-static void validate_model_inputs(const std::string& file) {
+static void validate_model_inputs(const std::string& file,const StageSpec& stage) {
     std::ifstream input(file,std::ios::binary|std::ios::ate);
-    if(!input || input.tellg()<=0 || input.tellg()>32*1024*1024) throw std::runtime_error("Rest model must be a small metadata file, not the complete ViT model");
+    if(!input || input.tellg()!=static_cast<std::streamoff>(stage.model_bytes)) throw std::runtime_error("Model metadata byte count does not match the reviewed stage profile");
     std::vector<uint8_t> bytes(static_cast<size_t>(input.tellg()));input.seekg(0);
     input.read(reinterpret_cast<char*>(bytes.data()),bytes.size());
     flatbuffers::Verifier verifier(bytes.data(),bytes.size());
@@ -204,8 +236,8 @@ static void validate_model_inputs(const std::string& file) {
         auto name=net->tensorName()->Get(index)->str();
         found[name]=std::vector<int>(parameter->dims()->begin(),parameter->dims()->end());
     }
-    if(found.size()!=kInputs.size()) throw std::runtime_error("Model must expose exactly the reviewed eight rest inputs");
-    for(const auto& expected:kInputs) if(found[expected.name]!=expected.shape) throw std::runtime_error(std::string("Input contract mismatch: ")+expected.name);
+    if(found.size()!=stage.inputs.size()) throw std::runtime_error("Model input count does not match the reviewed stage profile");
+    for(const auto& expected:stage.inputs) if(found[expected.name]!=expected.shape) throw std::runtime_error(std::string("Input contract mismatch: ")+expected.name);
 }
 static bool primary_compute(const std::string& type) {
     return type=="Convolution" || type=="Deconvolution" || type=="ConvolutionDepthwise" || type=="DeconvolutionDepthwise" || type=="MatMul";
@@ -259,18 +291,19 @@ struct BackendTrace {
         return out.str()+"]}";
     }
 };
-static void save_report(const std::string& directory,const std::string& status,const std::string& backend,int main_backend,
+static void save_report(const StageSpec& stage,const std::string& directory,const std::string& status,const std::string& backend,int main_backend,
                         const std::string& capabilities,const BackendTrace& trace,float memory,double elapsed,
                         const std::string& outputs="{}",const std::string& observed_memory="null") {
     std::ofstream report(directory+"/report.json");
     if(!report) throw std::runtime_error("Cannot write report.json");
     report << std::setprecision(12) << "{\"status\":" << quote(status) << ",\"backendRequested\":" << quote(backend)
+           << ",\"stage\":" << quote(stage.name) << ",\"contract\":" << stage_json(stage)
            << ",\"sessionMainBackend\":" << main_backend << ",\"mnnRevision\":" << quote(kMnnRevision)
            << ",\"openclCapabilities\":" << capabilities << ",\"executionTrace\":" << trace.json()
            << ",\"sessionMemoryMb\":" << memory << ",\"elapsedSeconds\":" << elapsed
            << ",\"peakRssBytes\":" << peak_rss_bytes() << ",\"processRssKiB\":" << kb_field("/proc/self/status","VmRSS:")
            << ",\"systemAvailableKiB\":" << kb_field("/proc/meminfo","MemAvailable:")
-           << ",\"gpuMemoryMayBeMissingFromRss\":true,\"runs\":1,\"cpuThreads\":2,\"gaussians\":" << kGaussians
+           << ",\"gpuMemoryMayBeMissingFromRss\":true,\"runs\":1,\"cpuThreads\":2,\"gaussians\":" << stage.gaussians
            << ",\"computePrecisionRequested\":" << quote(backend=="opencl"?"OpenCL_Precision_Normal_fp16_storage_fp32_compute":"CPU_high_precision_fp32")
            << ",\"pureFp16ArithmeticRequested\":false"
            << ",\"openclModeBitsRequested\":" << (backend=="opencl"?(MNN_GPU_TUNING_NONE|MNN_GPU_MEMORY_BUFFER):0)
@@ -280,15 +313,28 @@ static void save_report(const std::string& directory,const std::string& status,c
     if(!report) throw std::runtime_error("Report write failed");
 }
 static int probe(int argc,char** argv) {
-    std::map<std::string,std::string> options;bool capabilities_only=false;
+    std::map<std::string,std::string> options;bool capabilities_only=false,print_contract=false;
     for(int index=1;index<argc;++index) {
         std::string key=argv[index];
-        if(key=="--help") {std::cout << "gemos-rest-probe --backend cpu|opencl [--capabilities-only] [--model FILE --weights FILE --inputs DIR --output DIR]\n";return 0;}
+        if(key=="--help") {
+            std::cout << "gemos-rest-probe --backend cpu|opencl [--stage rest|depth|gaussian] [--capabilities-only]\n"
+                      << "  --model FILE --weights FILE --inputs DIR --output DIR\n"
+                      << "gemos-rest-probe [--stage rest|depth|gaussian] --print-contract\n"
+                      << "Default stage: rest (8 inputs). depth: 6 features -> clamped_monodepth_disparity.f32;\n"
+                      << "gaussian: image + disparity_factor + 6 features + clamped depth (9 inputs) -> 5 Gaussians.\n"
+                      << "All tensor files are little-endian FP32. Run depth and gaussian in separate processes.\n";return 0;
+        }
         if(key=="--capabilities-only") {capabilities_only=true;continue;}
-        if(key!="--backend" && key!="--model" && key!="--weights" && key!="--inputs" && key!="--output") throw std::runtime_error("Unknown option: "+key);
+        if(key=="--print-contract") {print_contract=true;continue;}
+        if(key!="--stage" && key!="--backend" && key!="--model" && key!="--weights" && key!="--inputs" && key!="--output") throw std::runtime_error("Unknown option: "+key);
         if(++index>=argc || options.count(key)) throw std::runtime_error("Missing or duplicate option value: "+key);
         options[key]=argv[index];
     }
+    const std::string stage_name=options.count("--stage")?options["--stage"]:"rest";
+    auto selected_stage=kStages.find(stage_name);
+    if(selected_stage==kStages.end()) throw std::runtime_error("Unknown stage; choose rest, depth or gaussian");
+    const auto& stage=selected_stage->second;
+    if(print_contract) {std::cout << stage_json(stage) << std::endl;return 0;}
     const std::string backend=options["--backend"];
     if(backend!="cpu" && backend!="opencl") throw std::runtime_error("Explicit --backend cpu|opencl is required");
     auto start=Clock::now();PublicOpenCL opencl;std::string capabilities="null";
@@ -297,9 +343,10 @@ static int probe(int argc,char** argv) {
     if(backend=="opencl" && !opencl.fp16) throw std::runtime_error("Public GPU has no cl_khr_fp16; refusing an unbudgeted FP32 GPU run");
     for(const char* key:{"--model","--weights","--inputs","--output"}) if(options[key].empty()) throw std::runtime_error(std::string("Required option: ")+key);
     std::filesystem::create_directories(options["--output"]);
-    validate_model_inputs(options["--model"]);
-    if(std::filesystem::file_size(options["--weights"])!=kWeightBytes) throw std::runtime_error("Wrong weight package size for this reviewed rest model");
-    phase("load_rest_model",start);
+    validate_model_inputs(options["--model"],stage);
+    if(std::filesystem::file_size(options["--weights"])!=stage.weight_bytes) throw std::runtime_error("Wrong weight package size for the reviewed stage profile");
+    std::cout << stage_json(stage) << std::endl;
+    phase("load_stage_model",start);
     std::shared_ptr<MNN::Interpreter> model(MNN::Interpreter::createFromFile(options["--model"].c_str()),MNN::Interpreter::destroy);
     if(!model) throw std::runtime_error("Rest model load failed");
     model->setExternalFile(options["--weights"].c_str());
@@ -320,7 +367,7 @@ static int probe(int argc,char** argv) {
     MNN::ScheduleConfig cpu_schedule;cpu_schedule.type=MNN_FORWARD_CPU;cpu_schedule.numThread=2;cpu_schedule.backendConfig=&cpu_config;
     auto runtime=backend=="opencl"?MNN::Interpreter::createRuntime({schedule,cpu_schedule}):MNN::Interpreter::createRuntime({schedule});
     if(!runtime.first.count(schedule.type)) throw std::runtime_error("Requested MNN runtime unavailable; refusing whole-model CPU fallback");
-    phase("create_rest_session",start);
+    phase("create_stage_session",start);
     auto session=model->createSession(schedule,runtime);
     if(!session) throw std::runtime_error("Rest session creation failed");
     float memory=0;int resize=-1,actual[2]={-1,-1};
@@ -331,13 +378,13 @@ static int probe(int argc,char** argv) {
     std::cout << "{\"sessionMainBackend\":" << actual[0] << ",\"sessionMemoryMb\":" << memory << ",\"resizeStatus\":" << resize << ",\"executionTrace\":" << trace.json() << "}" << std::endl;
     const bool unavailable=backend=="opencl" && (actual[0]!=MNN_FORWARD_OPENCL || !trace.primary_gpu || trace.primary_cpu || trace.unknown);
     if(resize!=0 || unavailable) {
-        save_report(options["--output"],unavailable?"rejected_whole_or_primary_cpu_fallback":"session_resize_failed",backend,actual[0],capabilities,trace,memory,seconds(start));
+        save_report(stage,options["--output"],unavailable?"rejected_whole_or_primary_cpu_fallback":"session_resize_failed",backend,actual[0],capabilities,trace,memory,seconds(start));
         return 20;
     }
     std::string observed_memory="null";
     if(backend=="opencl") {
         std::ostringstream observations;observations << '[';bool first=true;size_t buffers=0;
-        for(const auto& expected:kInputs) {
+        for(const auto& expected:stage.inputs) {
             auto tensor=model->getSessionInput(session,expected.name);
             const auto* selected=model->getBackend(session,tensor);
             if(!selected || selected->type()!=MNN_FORWARD_OPENCL || !tensor->deviceId()) continue;
@@ -351,9 +398,9 @@ static int probe(int argc,char** argv) {
         observations << ']';observed_memory=observations.str();
         std::cout << "{\"openclModeBits\":" << schedule.numThread << ",\"actualOpenclInputMemoryObjects\":" << observed_memory << "}" << std::endl;
     }
-    phase("load_eight_inputs",start);
-    if(model->getSessionInputAll(session).size()!=kInputs.size()) throw std::runtime_error("Unexpected rest input count");
-    for(const auto& expected:kInputs) {
+    phase("load_stage_inputs",start);
+    if(model->getSessionInputAll(session).size()!=stage.inputs.size()) throw std::runtime_error("Unexpected stage input count");
+    for(const auto& expected:stage.inputs) {
         auto input=model->getSessionInput(session,expected.name);
         if(!input || input->shape()!=expected.shape) throw std::runtime_error(std::string("Runtime input shape mismatch: ")+expected.name);
         MNN::Tensor host(input,MNN::Tensor::CAFFE);
@@ -373,34 +420,34 @@ static int probe(int argc,char** argv) {
     auto after=[&](const std::vector<MNN::Tensor*>&,const MNN::OperatorInfo* info) {trace.completed_operation(info);return true;};
     auto error=model->runSessionWithCallBackInfo(session,before,after,true);
     if(error!=MNN::NO_ERROR) {
-        save_report(options["--output"],"inference_failed_"+std::to_string(error),backend,actual[0],capabilities,trace,memory,seconds(start),"{}",observed_memory);return 21;
+        save_report(stage,options["--output"],"inference_failed_"+std::to_string(error),backend,actual[0],capabilities,trace,memory,seconds(start),"{}",observed_memory);return 21;
     }
     phase("save_outputs",start);
-    const std::map<std::string,int> expected_outputs{{"mean_vectors_ndc",3},{"singular_values_ndc",3},{"quaternions_ndc",4},{"colors",3},{"opacities",0}};
-    if(model->getSessionOutputAll(session).size()!=expected_outputs.size()) throw std::runtime_error("Unexpected Gaussian output count");
+    if(model->getSessionOutputAll(session).size()!=stage.outputs.size()) throw std::runtime_error("Unexpected stage output count");
     std::ostringstream outputs;outputs << std::setprecision(12) << '{';bool first=true;
-    for(const auto& expected:expected_outputs) {
-        auto tensor=model->getSessionOutput(session,expected.first.c_str());
-        std::vector<int> shape=expected.second?std::vector<int>{1,static_cast<int>(kGaussians),expected.second}:std::vector<int>{1,static_cast<int>(kGaussians)};
-        if(!tensor || tensor->shape()!=shape) throw std::runtime_error("Gaussian output shape mismatch: "+expected.first);
+    for(const auto& expected:stage.outputs) {
+        auto tensor=model->getSessionOutput(session,expected.name);
+        if(!tensor || tensor->shape()!=expected.shape) throw std::runtime_error(std::string("Stage output shape mismatch: ")+expected.name);
         MNN::Tensor host(tensor,MNN::Tensor::CAFFE);
         if(host.getType().code!=halide_type_float || host.getType().bits!=32 || !tensor->copyToHostTensor(&host)) throw std::runtime_error("Output must copy to FP32 host storage");
         double sum=0,square=0;float minimum=INFINITY,maximum=-INFINITY;
         for(int index=0;index<host.elementSize();++index) {
-            float value=host.host<float>()[index];if(!std::isfinite(value)) throw std::runtime_error("Nonfinite Gaussian output: "+expected.first);
+            float value=host.host<float>()[index];if(!std::isfinite(value)) throw std::runtime_error(std::string("Nonfinite stage output: ")+expected.name);
             sum+=value;square+=static_cast<double>(value)*value;minimum=std::min(minimum,value);maximum=std::max(maximum,value);
         }
-        std::string filename=expected.first+".f32";
+        std::string filename=std::string(expected.name)+".f32";
         std::ofstream raw(options["--output"]+"/"+filename,std::ios::binary|std::ios::trunc);
-        raw.write(reinterpret_cast<const char*>(host.host<float>()),host.size());if(!raw) throw std::runtime_error("Gaussian output write failed");
+        raw.write(reinterpret_cast<const char*>(host.host<float>()),host.size());if(!raw) throw std::runtime_error("Stage output write failed");
         if(!first) outputs << ',';first=false;
-        outputs << quote(expected.first) << ":{\"file\":" << quote(filename) << ",\"elements\":" << host.elementSize()
+        outputs << quote(expected.name) << ":{\"file\":" << quote(filename) << ",\"shape\":[";
+        for(size_t axis=0;axis<expected.shape.size();++axis) {if(axis) outputs << ',';outputs << expected.shape[axis];}
+        outputs << "],\"bytes\":" << host.size() << ",\"elements\":" << host.elementSize()
                 << ",\"min\":" << minimum << ",\"max\":" << maximum << ",\"mean\":" << sum/host.elementSize() << ",\"rms\":" << std::sqrt(square/host.elementSize()) << '}';
     }
     outputs << '}';
     bool incomplete=backend=="opencl" && trace.primary_completed_gpu!=trace.primary_gpu;
     std::string status=incomplete?"incomplete_execution_backend_trace":(backend=="cpu"?"finite_cpu_outputs":(trace.cpu_types.empty()?"finite_opencl_outputs":"finite_hybrid_opencl_cpu_outputs"));
-    save_report(options["--output"],status,backend,actual[0],capabilities,trace,memory,seconds(start),outputs.str(),observed_memory);
+    save_report(stage,options["--output"],status,backend,actual[0],capabilities,trace,memory,seconds(start),outputs.str(),observed_memory);
     phase("complete",start);return incomplete?22:0;
 }
 int main(int argc,char** argv) {

@@ -22,12 +22,25 @@ jobs:
         run: |
           python3 android/tools/mnn/restrict_public_opencl.py third-party-mnn
       - name: Locate the runner's existing Android NDK
+        id: ndk
         run: |
           task_ndk_dir=$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)
           test -n "$task_ndk_dir"
           test -f "$task_ndk_dir/build/cmake/android.toolchain.cmake"
           echo "GEMOS_PROBE_NDK=$task_ndk_dir" >> "$GITHUB_ENV"
+          task_ndk_version=$(sed -n 's/^Pkg.Revision[[:space:]]*=[[:space:]]*//p' "$task_ndk_dir/source.properties")
+          test -n "$task_ndk_version"
+          echo "version=$task_ndk_version" >> "$GITHUB_OUTPUT"
+      - name: Restore the exact reviewed runtime library
+        id: runtime-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build-rest-mnn/libMNN.so
+            build-rest-mnn/runtime-SHA256SUMS.txt
+          key: mnn-rest-runtime-v1-${{ runner.os }}-${{ runner.arch }}-dbf9ba61b08106a3b43426e295d1a29cb41cc8fe-ndk${{ steps.ndk.outputs.version }}-arm64-api28-cxxshared-${{ hashFiles('.github/workflows/android-original-rest-probe.yml', 'android/tools/mnn/restrict_public_opencl.py') }}
       - name: Build one MNN shared library with OpenCL and low-memory support
+        if: steps.runtime-cache.outputs.cache-hit != 'true'
         run: |
           cmake -S third-party-mnn -B build-rest-mnn -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$GEMOS_PROBE_NDK/build/cmake/android.toolchain.cmake" \
@@ -45,6 +58,20 @@ jobs:
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             '-DCMAKE_BUILD_RPATH=$ORIGIN' '-DCMAKE_INSTALL_RPATH=$ORIGIN'
           cmake --build build-rest-mnn --target MNN -j 2
+          cd build-rest-mnn
+          sha256sum libMNN.so > runtime-SHA256SUMS.txt
+      - name: Verify the restored or newly built runtime
+        run: |
+          cd build-rest-mnn
+          sha256sum --check runtime-SHA256SUMS.txt
+      - name: Save the runtime before linking the diagnostic executable
+        if: steps.runtime-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build-rest-mnn/libMNN.so
+            build-rest-mnn/runtime-SHA256SUMS.txt
+          key: ${{ steps.runtime-cache.outputs.cache-primary-key }}
       - name: Build the ordinary ARM64 diagnostic executable
         run: |
           cmake -S android/tools/mnn -B build-rest-cli -G Ninja \
@@ -87,6 +114,8 @@ jobs:
                 'minAndroidApi':28,'opencl':True,'openclLibraryPolicy':'public libOpenCL.so name only',
                 'lowMemory':True,'separateOpenclLibrary':False,'stl':'c++_shared',
                 'openclModeBits':65,'openclMemory':'buffer','openclPrecision':'Normal_fp16_storage_fp32_compute',
+                'stages':['rest','depth','gaussian'],'stageDefault':'rest',
+                'stageInputs':{'rest':8,'depth':6,'gaussian':9},
                 'guardWallSeconds':60,'guardRssMiB':1536,'guardAvailableMiB':1024,
                 'buildOnly':True,'noAutomaticDeviceExecution':True,
                 'ndkSourceProperties':(Path(os.environ['GEMOS_PROBE_NDK'])/'source.properties').read_text()}

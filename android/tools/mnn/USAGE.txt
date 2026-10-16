@@ -13,13 +13,21 @@ Capability query, without loading a model:
   ./gemos-rest-probe --backend opencl --capabilities-only
 
 One inference, after a separate reviewed memory/temperature admission:
-  ./gemos-rest-probe --backend opencl --model MODEL.mnn \
+  ./gemos-rest-probe --backend opencl --stage rest --model MODEL.mnn \
     --weights MODEL.mnn.weight --inputs INPUT_DIRECTORY --output OUTPUT_DIRECTORY
+
+The default stage is rest. --stage depth and --stage gaussian select the two
+separately validated parts of that same graph. Print a fixed stage contract
+without loading a model or GPU:
+  ./gemos-rest-probe --stage depth --print-contract
+  ./gemos-rest-probe --stage gaussian --print-contract
+stdout is newline-delimited JSON, beginning with the diagnostic process PID.
 
 CPU comparison uses --backend cpu. It retains the same conservative Android
 limits and is not permission to attempt the known multi-gigabyte CPU pipeline.
 
-Inputs are exactly eight little-endian float32 files, in NCHW layout:
+All tensor files are little-endian float32 in NCHW layout. The rest profile
+requires exactly these eight named inputs:
   image.f32            [1,3,1536,1536], RGB [0,1]
   disparity_factor.f32 [1]
   spn_latent0.f32      [1,1024,96,96]
@@ -31,6 +39,44 @@ Inputs are exactly eight little-endian float32 files, in NCHW layout:
 The six features must come from the original 384px ViTs and original overlapping
 pyramid merge, before the SPN upsample modules. The model remains 1536px and
 produces 1,179,648 Gaussians. Arbitrary renamed tensors are not interchangeable.
+
+The depth profile requires only the six spn_*.f32 feature files above. Its only
+output is clamped_monodepth_disparity.f32 [1,2,1536,1536] (18,874,368 bytes),
+the original two-channel monodepth head after the original Clip. No new depth
+sorting, normalization or resolution change is introduced. The original model
+sets sorting_monodepth=False and decoder_features=False.
+
+The gaussian profile requires the original eight inputs plus that depth output
+under exactly the same clamped_monodepth_disparity.f32 filename. Its original SPN
+upsamplers run again to reduce concurrently live memory; the Gaussian graph
+does not consume large DPT decoder features. The desktop CPU chain was bitwise
+equal to the full-rest MNN graph for all five outputs. This does not establish
+mobile GPU numerical accuracy or memory admission.
+
+Use separate child processes, waiting for depth to exit before launching
+gaussian so all depth session/runtime allocations have been released:
+  ./gemos-rest-probe --backend opencl --stage depth \
+    --model MODELS/A-monodepth-fp16.mnn \
+    --weights MODELS/A-monodepth-fp16.mnn.weight \
+    --inputs DEPTH_INPUTS --output DEPTH_OUTPUT
+  # After a successful, independently checked depth run, place its
+  # clamped_monodepth_disparity.f32 into GAUSSIAN_INPUTS, then run:
+  ./gemos-rest-probe --backend opencl --stage gaussian \
+    --model MODELS/B-gaussians-fp16.mnn \
+    --weights MODELS/B-gaussians-fp16.mnn.weight \
+    --inputs GAUSSIAN_INPUTS --output GAUSSIAN_OUTPUT
+The application must use the depth output from the current photo, not a stored
+desktop diagnostic fixture. Neither stage automatically invokes the next one.
+
+Fixed reviewed metadata/weight sizes (bytes):
+  rest       9,504,520 / 93,184,376
+  depth         17,656 / 78,195,976
+  gaussian   9,493,192 / 55,394,416
+Each model receives its explicit --weights path via setExternalFile before
+session creation. Application model-store fields are depthModel, depthWeights,
+gaussianModel, gaussianWeights; corresponding deployment basenames are exactly
+A-monodepth-fp16.mnn, A-monodepth-fp16.mnn.weight, B-gaussians-fp16.mnn and
+B-gaussians-fp16.mnn.weight. Verify the separately supplied SHA-256 manifest.
 
 The Android watchdog exits only this diagnostic process after 60 seconds, RSS
 above 1536 MiB, or system MemAvailable below 1024 MiB. An external host watchdog
@@ -52,8 +98,14 @@ OpenCL explicitly requests BUFFER memory and disables tuning (mode bits 65).
 Precision_Normal (0) in this pinned source uses FP16 storage and FP32 COMPUTE_FLOAT;
 pure FP16 arithmetic is not requested. Actual input CL_MEM_TYPE is queried through
 the public OpenCL API, with its CL_MEM_CONTEXT checked against the admitted GPU.
+The non-owning cl_mem handle bytes are borrowed from the pinned MNN wrapper;
+the executable never creates or destroys a C++ OpenCL wrapper and has no static
+OpenCL function dependency. All OpenCL calls use public C API function pointers.
 
-Outputs contain five raw float32 tensors and report.json. A finite result alone
-does not prove correctness. Compare against the original desktop output, inspect
+Rest and gaussian outputs are mean_vectors_ndc.f32 [1,1179648,3],
+singular_values_ndc.f32 [1,1179648,3], quaternions_ndc.f32 [1,1179648,4],
+colors.f32 [1,1179648,3] and opacities.f32 [1,1179648]. Every stage also writes
+report.json with stage/contract, actual execution backends and output shapes.
+A finite result alone does not prove correctness. Compare against the original desktop output, inspect
 memory and temperature, and stop before any production integration if these
 checks fail. No automatic retry or warmup inference is performed.
