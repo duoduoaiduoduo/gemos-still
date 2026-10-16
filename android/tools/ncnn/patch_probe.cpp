@@ -119,16 +119,18 @@ static void write_output(const std::string& prefix, const char* name,
 
 static int probe(int argc, char** argv) {
     if (argc < 7 || argc > 9) {
-        std::fprintf(stderr, "Usage: gemos-patch-probe PARAM BIN INPUT.f32 OUTPUT_PREFIX cpu|vulkan fp32|fp16 [--tap-tail] [--tail-layernorm-cpu]\n");
+        std::fprintf(stderr, "Usage: gemos-patch-probe PARAM BIN INPUT.f32 OUTPUT_PREFIX cpu|vulkan fp32|fp16 [--tap-tail] [--tail-layernorm-cpu|--layernorm-cpu]\n");
         return 2;
     }
-    bool tapTail = false, tailLayernormCpu = false;
+    bool tapTail = false, tailLayernormCpu = false, layernormCpu = false;
     for (int i = 7; i < argc; ++i) {
         const std::string flag = argv[i];
         if (flag == "--tap-tail") tapTail = true;
         else if (flag == "--tail-layernorm-cpu") tailLayernormCpu = true;
+        else if (flag == "--layernorm-cpu") layernormCpu = true;
         else throw std::runtime_error("Unknown diagnostic option");
     }
+    if (tailLayernormCpu && layernormCpu) throw std::runtime_error("Choose one normalization policy");
     const std::string backend = argv[5], precision = argv[6];
     if (backend != "cpu" && backend != "vulkan") throw std::runtime_error("Unknown backend");
     if (precision != "fp32" && precision != "fp16") throw std::runtime_error("Unknown precision");
@@ -162,16 +164,16 @@ static int probe(int argc, char** argv) {
 #endif
     phase("load_param", began);
     check(net.load_param(argv[1]), "load_param");
-    if (tailLayernormCpu) {
+    if (tailLayernormCpu || layernormCpu) {
         size_t selected = 0;
         for (ncnn::Layer* layer : net.mutable_layers()) {
-            if (layer->name == "ln_169" && layer->type == "LayerNorm") {
+            if (layer->type == "LayerNorm" && (layernormCpu || layer->name == "ln_169")) {
                 layer->support_vulkan = false;
                 ++selected;
             }
         }
         // Scoped to this reviewed patch graph; do not silently change another model.
-        if (selected != 1) throw std::runtime_error("Expected exactly one original patch tail LayerNorm");
+        if (selected != (layernormCpu ? 49U : 1U)) throw std::runtime_error("Unexpected original patch LayerNorm count");
     }
     phase("load_weights", began);
     check(net.load_model(argv[2]), "load_model");
@@ -197,6 +199,7 @@ static int probe(int argc, char** argv) {
         firstType = false;
     }
     report << "},\"tailLayernormCpu\":" << (tailLayernormCpu ? "true" : "false")
+           << ",\"allLayernormCpu\":" << (layernormCpu ? "true" : "false")
            << ",\"precisionStorageRequested\":\"" << precision
            << "\",\"fp16Arithmetic\":false,\"cpuThreads\":2,\"runs\":1,\"inputShape\":[1,3,384,384],\"outputs\":{";
     // Capture intermediate outputs before final to avoid re-running freed trunks.
