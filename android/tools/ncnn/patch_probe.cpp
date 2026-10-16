@@ -138,13 +138,14 @@ static void write_output(const std::string& prefix, const char* name,
 
 static int probe(int argc, char** argv) {
     if (argc < 7) {
-        std::fprintf(stderr, "Usage: gemos-patch-probe PARAM BIN INPUT.f32 OUTPUT_PREFIX cpu|vulkan fp32|fp16 [--image-only|--tap-tail] [--tail-layernorm-cpu|--layernorm-cpu] [--repeat=1|2|3] [--fresh-vulkan-allocators]\n");
+        std::fprintf(stderr, "Usage: gemos-patch-probe PARAM BIN INPUT.f32 OUTPUT_PREFIX cpu|vulkan fp32|fp16 [--image-only|--tap-tail] [--tail-layernorm-cpu|--layernorm-cpu] [--repeat=1|2|3] [--fresh-vulkan-allocators] [--no-cpu-pool] [--fresh-net]\n");
         return 2;
     }
     bool tapTail = false, tailLayernormCpu = false, layernormCpu = false, imageOnly = false;
     int repeats = 1;
     bool repeatSpecified = false;
     bool freshVulkanAllocators = false;
+    bool noCpuPool = false, freshNet = false;
     for (int i = 7; i < argc; ++i) {
         const std::string flag = argv[i];
         if (flag == "--tap-tail") tapTail = true;
@@ -154,6 +155,14 @@ static int probe(int argc, char** argv) {
         else if (flag == "--fresh-vulkan-allocators") {
             if (freshVulkanAllocators) throw std::runtime_error("Fresh Vulkan allocators must be specified only once");
             freshVulkanAllocators = true;
+        }
+        else if (flag == "--no-cpu-pool") {
+            if (noCpuPool) throw std::runtime_error("CPU pool policy must be specified only once");
+            noCpuPool = true;
+        }
+        else if (flag == "--fresh-net") {
+            if (freshNet) throw std::runtime_error("Fresh Net policy must be specified only once");
+            freshNet = true;
         }
         else if (flag.rfind("--repeat=", 0) == 0) {
             if (repeatSpecified || (flag != "--repeat=1" && flag != "--repeat=2" && flag != "--repeat=3"))
@@ -170,6 +179,7 @@ static int probe(int argc, char** argv) {
     if (precision != "fp32" && precision != "fp16") throw std::runtime_error("Unknown precision");
     if (freshVulkanAllocators && (backend != "vulkan" || repeats < 2))
         throw std::runtime_error("Fresh Vulkan allocators require the Vulkan backend and at least two repeats");
+    if (freshNet && repeats < 2) throw std::runtime_error("Fresh Net requires at least two repeats");
     const auto began = Clock::now();
     constexpr size_t pixels = 3 * 384 * 384;
     std::vector<float> input(pixels);
@@ -181,42 +191,55 @@ static int probe(int argc, char** argv) {
         throw std::runtime_error("Input read failed");
     for (float value : input) if (!std::isfinite(value)) throw std::runtime_error("Nonfinite input");
     const std::uint32_t originalInputCrc = input_crc32(input);
-    phase("create_backend", began);
-    ncnn::Net net;
-    net.opt.num_threads = 2;
-    net.opt.lightmode = true;
-    net.opt.use_int8_inference = false;
-    net.opt.use_bf16_storage = false;
-    net.opt.use_fp16_packed = precision == "fp16";
-    net.opt.use_fp16_storage = precision == "fp16";
-    net.opt.use_fp16_arithmetic = false;
-    net.opt.use_vulkan_compute = backend == "vulkan";
+    std::unique_ptr<ncnn::Net> net;
+    int netLoads = 0;
+    const auto initializeNet = [&]() {
+        const auto initializationBegan = Clock::now();
+        // The caller must destroy the previous complete Net first. Do not call
+        // load_model again on an existing set of pipelines or weight buffers.
+        if (net) throw std::runtime_error("Previous Net must be fully released before initialization");
+        phase("create_backend", began);
+        net.reset(new ncnn::Net);
+        net->opt.num_threads = 2;
+        net->opt.lightmode = true;
+        net->opt.use_local_pool_allocator = !noCpuPool;
+        net->opt.use_int8_inference = false;
+        net->opt.use_bf16_storage = false;
+        net->opt.use_fp16_packed = precision == "fp16";
+        net->opt.use_fp16_storage = precision == "fp16";
+        net->opt.use_fp16_arithmetic = false;
+        net->opt.use_vulkan_compute = backend == "vulkan";
 #if NCNN_VULKAN
-    if (net.opt.use_vulkan_compute) {
-        if (ncnn::get_gpu_count() < 1) throw std::runtime_error("No public Vulkan compute device; no silent CPU fallback");
-        net.set_vulkan_device(0);
-    }
-#else
-    if (net.opt.use_vulkan_compute) throw std::runtime_error("This build has no Vulkan backend");
-#endif
-    phase("load_param", began);
-    check(net.load_param(argv[1]), "load_param");
-    if (tailLayernormCpu || layernormCpu) {
-        size_t selected = 0;
-        for (ncnn::Layer* layer : net.mutable_layers()) {
-            if (layer->type == "LayerNorm" && (layernormCpu || layer->name == "ln_169")) {
-                layer->support_vulkan = false;
-                ++selected;
-            }
+        if (net->opt.use_vulkan_compute) {
+            if (ncnn::get_gpu_count() < 1) throw std::runtime_error("No public Vulkan compute device; no silent CPU fallback");
+            net->set_vulkan_device(0);
         }
-        // Scoped to this reviewed patch graph; do not silently change another model.
-        if (selected != (layernormCpu ? 49U : 1U)) throw std::runtime_error("Unexpected original patch LayerNorm count");
-    }
-    phase("load_weights", began);
-    check(net.load_model(argv[2]), "load_model");
+#else
+        if (net->opt.use_vulkan_compute) throw std::runtime_error("This build has no Vulkan backend");
+#endif
+        phase("load_param", began);
+        check(net->load_param(argv[1]), "load_param");
+        if (tailLayernormCpu || layernormCpu) {
+            size_t selected = 0;
+            for (ncnn::Layer* layer : net->mutable_layers()) {
+                if (layer->type == "LayerNorm" && (layernormCpu || layer->name == "ln_169")) {
+                    layer->support_vulkan = false;
+                    ++selected;
+                }
+            }
+            // Scoped to this reviewed patch graph; do not silently change another model.
+            if (selected != (layernormCpu ? 49U : 1U)) throw std::runtime_error("Unexpected original patch LayerNorm count");
+        }
+        phase("load_weights", began);
+        check(net->load_model(argv[2]), "load_model");
+        ++netLoads;
+        return seconds(initializationBegan);
+    };
+    const double firstNetInitializeSeconds = initializeNet();
+    double totalNetInitializeSeconds = firstNetInitializeSeconds;
     std::map<std::string, int> cpuOnlyTypes;
     size_t vulkanCapable = 0;
-    for (const ncnn::Layer* layer : net.layers()) {
+    for (const ncnn::Layer* layer : net->layers()) {
         if (layer->support_vulkan) ++vulkanCapable;
         else ++cpuOnlyTypes[layer->type];
     }
@@ -226,7 +249,7 @@ static int probe(int argc, char** argv) {
     if (!report) throw std::runtime_error("Cannot open report");
     report << std::setprecision(10) << "{\"backendRequested\":\"" << backend
            << "\",\"gpuLayerCoverage\":\"capabilityFlagsOnly_notExecutionTrace\",\"vulkanCapableLayers\":" << vulkanCapable
-           << ",\"layerCount\":" << net.layers().size() << ",\"cpuOnlyLayerTypes\":{";
+           << ",\"layerCount\":" << net->layers().size() << ",\"cpuOnlyLayerTypes\":{";
     bool firstType = true;
     for (const auto& entry : cpuOnlyTypes) {
         if (!firstType) report << ',';
@@ -240,6 +263,8 @@ static int probe(int argc, char** argv) {
            << "\",\"fp16Arithmetic\":false,\"cpuThreads\":2,\"runs\":" << repeats
            << ",\"inputShape\":[1,3,384,384],\"inputCrc32Initial\":" << originalInputCrc
            << ",\"freshVulkanAllocators\":" << (freshVulkanAllocators ? "true" : "false")
+           << ",\"freshNetEachRun\":" << (freshNet ? "true" : "false")
+           << ",\"cpuAllocatorPolicy\":\"" << (noCpuPool ? "system_malloc" : "net_pool") << '"'
            << ",\"vulkanAllocatorPolicy\":\"" << (backend == "cpu" ? "not_applicable" : freshVulkanAllocators ? "fresh_per_run" : "device_pool") << "\",";
     // Capture intermediate outputs before final to avoid re-running freed trunks.
     std::vector<const char*> names;
@@ -250,7 +275,15 @@ static int probe(int argc, char** argv) {
         report << "\"repeatInputPolicy\":\"single_immutable_host_buffer_new_extractor_each_run\",\"iterations\":[";
     bool inputMutated = false;
     int completedRuns = 0;
+    double totalInferenceSeconds = 0;
     for (int run = 0; run < repeats; ++run) {
+        double netInitializeSeconds = run == 0 ? firstNetInitializeSeconds : 0;
+        if (run > 0 && freshNet) {
+            phase("release_previous_net", began);
+            net.reset(); // Finish destruction before allocating any replacement.
+            netInitializeSeconds = initializeNet();
+            totalNetInitializeSeconds += netInitializeSeconds;
+        }
         const auto runBegan = Clock::now();
         const std::uint32_t inputCrcBefore = input_crc32(input);
         const std::string prefix = repeats == 1 ? std::string(argv[4]) : std::string(argv[4]) + ".r" + std::to_string(run);
@@ -269,11 +302,11 @@ static int probe(int argc, char** argv) {
             std::unique_ptr<ncnn::VkBlobAllocator> freshBlob;
             std::unique_ptr<ncnn::VkStagingAllocator> freshStaging;
             if (freshVulkanAllocators) {
-                freshBlob.reset(new ncnn::VkBlobAllocator(net.vulkan_device()));
-                freshStaging.reset(new ncnn::VkStagingAllocator(net.vulkan_device()));
+                freshBlob.reset(new ncnn::VkBlobAllocator(net->vulkan_device()));
+                freshStaging.reset(new ncnn::VkStagingAllocator(net->vulkan_device()));
             }
 #endif
-            ncnn::Extractor extractor = net.create_extractor();
+            ncnn::Extractor extractor = net->create_extractor();
 #if NCNN_VULKAN
             if (freshVulkanAllocators) {
                 extractor.set_blob_vkallocator(freshBlob.get());
@@ -296,15 +329,19 @@ static int probe(int argc, char** argv) {
         const std::uint32_t inputCrcAfter = input_crc32(input);
         inputMutated = inputCrcBefore != originalInputCrc || inputCrcAfter != inputCrcBefore;
         ++completedRuns;
+        const double runInferenceSeconds = seconds(runBegan);
+        totalInferenceSeconds += runInferenceSeconds;
         report << "},\"inputCrc32Before\":" << inputCrcBefore << ",\"inputCrc32After\":" << inputCrcAfter
-               << ",\"inputUnchanged\":" << (inputMutated ? "false" : "true");
+               << ",\"inputUnchanged\":" << (inputMutated ? "false" : "true")
+               << ",\"netLoadIndex\":" << netLoads << ",\"netInitializeSeconds\":" << netInitializeSeconds;
         if (repeats > 1)
-            report << ",\"inferenceSeconds\":" << seconds(runBegan) << ",\"peakRssBytes\":" << peak_rss_bytes() << '}';
+            report << ",\"inferenceSeconds\":" << runInferenceSeconds << ",\"peakRssBytes\":" << peak_rss_bytes() << '}';
         if (inputMutated) break;
     }
     if (repeats > 1) report << ']';
     const double completed = seconds(began);
-    report << ",\"initializeSeconds\":" << initialized << ",\"inferenceSeconds\":" << completed - initialized
+    report << ",\"initializeSeconds\":" << initialized << ",\"inferenceSeconds\":" << totalInferenceSeconds
+           << ",\"netLoads\":" << netLoads << ",\"totalNetInitializeSeconds\":" << totalNetInitializeSeconds
            << ",\"elapsedSeconds\":" << completed << ",\"peakRssBytes\":" << peak_rss_bytes()
            << ",\"completedRuns\":" << completedRuns
            << ",\"status\":\"" << (inputMutated ? "input_buffer_mutated" : "finite_outputs") << "\"}\n";
