@@ -224,10 +224,16 @@ static int probe(int argc, char** argv) {
     if (net.opt.use_vulkan_compute) throw std::runtime_error("This build has no Vulkan backend");
 #endif
     phase("load_param", began); check(net.load_param(argv[1]), "load_param");
-    int layernorm_count = 0;
-    for (ncnn::Layer* layer : net.mutable_layers())
+    int layernorm_count = 0, memorydata_count = 0;
+    for (ncnn::Layer* layer : net.mutable_layers()) {
         if (layer->type == "LayerNorm") { layer->support_vulkan = false; ++layernorm_count; }
+        // Repeated extraction fails on the reviewed phone backend when MemoryData
+        // stays on Vulkan. Keep the original constants on CPU and upload their
+        // outputs per Extractor; this preserves the validated result with one Net.
+        if (layer->type == "MemoryData") { layer->support_vulkan = false; ++memorydata_count; }
+    }
     if (layernorm_count != 49) throw std::runtime_error("Expected exactly 49 original LayerNorm layers");
+    if (memorydata_count != 50) throw std::runtime_error("Expected exactly 50 original MemoryData layers");
     phase("load_weights_once", began); check(net.load_model(argv[2]), "load_model");
     std::map<std::string, int> cpu_only;
     std::size_t vulkan_capable = 0;
@@ -239,6 +245,8 @@ static int probe(int argc, char** argv) {
     if (!report) throw std::runtime_error("Cannot open pyramid report");
     report << std::setprecision(10) << "{\"backendRequested\":\"" << backend << "\",\"precisionStorageRequested\":\"" << precision
            << "\",\"fp16Arithmetic\":false,\"cpuThreads\":2,\"layernormCpuCount\":" << layernorm_count
+           << ",\"memoryDataCpuCount\":" << memorydata_count
+           << ",\"constantStoragePolicy\":\"" << (backend == "vulkan" ? "original_cpu_memorydata_upload_each_extractor" : "original_cpu_memorydata") << '"'
            << ",\"netLoads\":1,\"patchCount\":35,\"batchSize\":1,\"originalInternalSize\":[1536,1536],"
            << "\"gpuLayerCoverage\":\"capabilityFlagsOnly_notExecutionTrace\",\"vulkanCapableLayers\":" << vulkan_capable
            << ",\"layerCount\":" << net.layers().size() << ",\"cpuOnlyLayerTypes\":{";
