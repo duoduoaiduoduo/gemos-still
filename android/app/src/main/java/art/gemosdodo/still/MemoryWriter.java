@@ -8,10 +8,11 @@ import org.json.JSONObject;
 final class MemoryWriter {
  static FloatBuffer values(OrtSession.Result out,String name)throws Exception{return ((OnnxTensor)out.get(name).orElseThrow()).getFloatBuffer();}
  static File write(File dir,File photo,OrtSession.Result result,int width,int height)throws Exception{return write(dir,photo,result,width,height,"一刻记忆");}
- static File write(File dir,File photo,OrtSession.Result result,int width,int height,String title)throws Exception{
+ static File write(File dir,File photo,OrtSession.Result result,int width,int height,String title)throws Exception{return write(dir,photo,result,width,height,title,CameraIntrinsics.focalPixels(CameraIntrinsics.DEFAULT_35MM,width,height));}
+ static File write(File dir,File photo,OrtSession.Result result,int width,int height,String title,double focalPx)throws Exception{
   FloatBuffer mean=values(result,"mean_vectors_ndc"),scale=values(result,"singular_values_ndc"),quat=values(result,"quaternions_ndc"),color=values(result,"colors"),alpha=values(result,"opacities");int n=alpha.remaining();
   if(mean.remaining()!=n*3||scale.remaining()!=n*3||quat.remaining()!=n*4||color.remaining()!=n*3)throw new IOException("模型输出形状不匹配");
-  double focal=30*Math.hypot(width,height)/Math.hypot(36,24),sx=width/(2*focal),sy=height/(2*focal);float[][] sample=new float[3][Math.min(n,60000)];int count=0;
+  double focal=CameraIntrinsics.pixelsOrDefault(focalPx,width,height),sx=width/(2*focal),sy=height/(2*focal);float[][] sample=new float[3][Math.min(n,60000)];int count=0;
   for(int i=0;i<n&&count<sample[0].length;i+=Math.max(1,n/60000)){float z=mean.get(i*3+2);if(alpha.get(i)>.015&&z>0&&Float.isFinite(z)){sample[0][count]=(float)(mean.get(i*3)*sx);sample[1][count]=(float)(-mean.get(i*3+1)*sy);sample[2][count]=-z;count++;}}
   if(count<100)throw new IOException("有效粒子不足");double[] lo=new double[3],hi=new double[3];for(int j=0;j<3;j++){Arrays.sort(sample[j],0,count);lo[j]=sample[j][(int)(count*.005)];hi[j]=sample[j][Math.min(count-1,(int)(count*.995))];}
   double norm=1.85/Math.max(1e-5,Math.max(hi[0]-lo[0],hi[1]-lo[1])),tz=Math.min(norm,.72/Math.max(hi[2]-lo[2],1e-5));double[] transform={norm*sx,-norm*sy,-tz};

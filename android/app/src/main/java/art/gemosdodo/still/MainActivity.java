@@ -30,6 +30,7 @@ public class MainActivity extends Activity implements GenerationEngine.Listener 
  private Button primary,secondary,example,open,create,more;
  private File photo,currentMemory,displayedResult;
  private String photoTitle="一刻记忆";
+ private double photoFocal35mm=CameraIntrinsics.DEFAULT_35MM;
  private int imageWidth,imageHeight,selectionTicket,pendingPicker;
  private boolean preparing,resumed,destroyed,showingExample,restorePickerWorkspace;
 
@@ -45,6 +46,7 @@ public class MainActivity extends Activity implements GenerationEngine.Listener 
   if(savedPhoto.isFile()){
    photo=savedPhoto;photoTitle=getPreferences(0).getString("photoTitle","一刻记忆");
    imageWidth=getPreferences(0).getInt("photoWidth",0);imageHeight=getPreferences(0).getInt("photoHeight",0);
+   photoFocal35mm=CameraIntrinsics.equivalentOrDefault(getPreferences(0).getFloat("photoFocal35mm",(float)CameraIntrinsics.DEFAULT_35MM));
    if(imageWidth<=0||imageHeight<=0)photo=null;
   }
   engine.attach(this);
@@ -115,7 +117,7 @@ public class MainActivity extends Activity implements GenerationEngine.Listener 
   if(!ModelStore.ready(this))new AlertDialog.Builder(this).setTitle("首次需要下载轻量模型").setMessage("约 809 MB，建议连接 Wi-Fi。下载后缓存在手机中，以后可离线生成。照片在本机处理。\n\n轻量版细节低于电脑版。生成时请保持应用在前台。").setNegativeButton("暂不下载",null).setPositiveButton("下载并生成",(dialog,which)->startGeneration()).show();
   else startGeneration();
  }
- private void startGeneration(){currentMemory=null;showingExample=false;displayedResult=null;engine.start(photo,imageWidth,imageHeight,photoTitle);updateControls();}
+ private void startGeneration(){currentMemory=null;showingExample=false;displayedResult=null;double focalPx=CameraIntrinsics.focalPixels(photoFocal35mm,imageWidth,imageHeight);engine.start(photo,imageWidth,imageHeight,photoTitle,focalPx);updateControls();}
  private void confirmCancel(){if(engine.state().running)new AlertDialog.Builder(this).setTitle("停止这次生成？").setMessage("已下载的模型缓存会保留。停止后可以重新选择照片。").setNegativeButton("继续生成",null).setPositiveButton("停止生成",(dialog,which)->engine.cancel()).show();}
  @Override public void changed(GenerationEngine.State state){
   if(destroyed)return;message(state.message);progress.setVisibility(state.running?View.VISIBLE:View.GONE);
@@ -144,11 +146,12 @@ public class MainActivity extends Activity implements GenerationEngine.Listener 
   files.execute(()->{
    File source=new File(getCacheDir(),"selected-"+ticket+".source"),pending=new File(getFilesDir(),"selected-photo.jpg.part");Bitmap bitmap=null;
    try{
+    final double equivalent35mm=CameraIntrinsics.readEquivalent35mm(getApplicationContext(),uri);
     copyUri(uri,source,25L*1024*1024);
     bitmap=ImageDecoder.decodeBitmap(ImageDecoder.createSource(source),(decoder,info,imageSource)->{int width=info.getSize().getWidth(),height=info.getSize().getHeight();if(width<=0||height<=0)throw new IllegalArgumentException("照片尺寸无效");float scale=Math.min(1f,1536f/Math.max(width,height));decoder.setTargetSize(Math.max(1,Math.round(width*scale)),Math.max(1,Math.round(height*scale)));decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);});
     int width=bitmap.getWidth(),height=bitmap.getHeight();try(OutputStream output=new BufferedOutputStream(new FileOutputStream(pending))){if(!bitmap.compress(Bitmap.CompressFormat.JPEG,94,output))throw new IOException("照片无法转换");}
     File selected=new File(getFilesDir(),"selected-photo.jpg");if(!pending.renameTo(selected))throw new IOException("照片未能保存");float ratio=Math.min(1f,160f/Math.max(width,height));Bitmap preview=Bitmap.createScaledBitmap(bitmap,Math.max(1,Math.round(width*ratio)),Math.max(1,Math.round(height*ratio)),true);if(preview==bitmap)bitmap=null;
-    ui(()->{if(ticket!=selectionTicket){preview.recycle();return;}restorePickerWorkspace=false;photo=selected;photoTitle=MemoryFile.displayTitle(name);imageWidth=width;imageHeight=height;currentMemory=null;showingExample=false;replaceThumbnail(preview);getPreferences(0).edit().putString("photoTitle",photoTitle).putInt("photoWidth",width).putInt("photoHeight",height).apply();message("轻量版适合在手机上体验，电脑版保留更多细节。");setPreparing(false);});
+    ui(()->{if(ticket!=selectionTicket){preview.recycle();return;}restorePickerWorkspace=false;photo=selected;photoTitle=MemoryFile.displayTitle(name);imageWidth=width;imageHeight=height;photoFocal35mm=equivalent35mm;currentMemory=null;showingExample=false;replaceThumbnail(preview);getPreferences(0).edit().putString("photoTitle",photoTitle).putInt("photoWidth",width).putInt("photoHeight",height).putFloat("photoFocal35mm",(float)equivalent35mm).apply();message("轻量版适合在手机上体验，电脑版保留更多细节。");setPreparing(false);});
    }catch(Throwable error){ui(()->{setPreparing(false);restoreAfterPicker("照片未能打开："+shortError(error));});}finally{if(bitmap!=null)bitmap.recycle();source.delete();pending.delete();}
   });
  }

@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.22)
+project(gemos_original_patch_probe LANGUAGES CXX)
+find_package(ncnn REQUIRED)
+add_executable(gemos-patch-probe patch_probe.cpp)
+target_compile_features(gemos-patch-probe PRIVATE cxx_std_17)
+target_link_libraries(gemos-patch-probe PRIVATE ncnn)
+target_compile_options(gemos-patch-probe PRIVATE -Wall -Wextra -Wpedantic)

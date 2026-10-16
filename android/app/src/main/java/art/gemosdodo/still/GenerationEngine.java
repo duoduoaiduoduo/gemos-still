@@ -32,10 +32,12 @@ final class GenerationEngine {
  private void publish(State next){state=next;main.post(()->{Listener current=listener;if(current!=null)current.changed(next);});}
  private void phase(String message){CrashDiagnostics.append(context,message);publish(new State(true,message,0,0,null,false));}
  private void check()throws InterruptedIOException{if(cancelled||Thread.currentThread().isInterrupted())throw new InterruptedIOException("已取消");}
- synchronized void start(File photo,int width,int height,String title){
+ synchronized void start(File photo,int width,int height,String title){start(photo,width,height,title,CameraIntrinsics.focalPixels(CameraIntrinsics.DEFAULT_35MM,width,height));}
+ synchronized void start(File photo,int width,int height,String title,double focalPx){
   if(state.running)return;
   cancelled=false;publish(new State(true,"正在准备本机模型…",0,0,null,false));
-  worker.execute(()->generate(photo,width,height,title));
+  final double calibratedFocal=CameraIntrinsics.pixelsOrDefault(focalPx,width,height);
+  worker.execute(()->generate(photo,width,height,title,calibratedFocal));
  }
  void cancel(){
   cancelled=true;
@@ -44,13 +46,14 @@ final class GenerationEngine {
   if(state.running)publish(new State(true,"正在停止，请稍候…",0,0,null,false));
  }
  void close(){detach();cancel();worker.shutdown();}
- private void generate(File photo,int width,int height,String title){
+ private void generate(File photo,int width,int height,String title,double focalPx){
   File working=new File(context.getCacheDir(),"generation-"+System.nanoTime());
   ScheduledExecutorService monitor=Executors.newSingleThreadScheduledExecutor();
   ScheduledFuture<?> sampling=monitor.scheduleAtFixedRate(()->{try{CrashDiagnostics.sample(context);}catch(Throwable ignored){}},0,2,TimeUnit.SECONDS);
   File generated=null;
   try{
    check();
+   CrashDiagnostics.append(context,"Camera intrinsics: "+width+"x"+height+" focalPx="+focalPx+" disparity="+(focalPx/width));
    ModelStore.ensure(context,(message,bytes,total)->{if(!cancelled)publish(new State(true,message,bytes,total,null,false));},()->cancelled);
    check();if(!working.mkdirs())throw new IOException("无法准备临时存储空间");
    phase("正在载入轻量模型…");
@@ -76,7 +79,7 @@ final class GenerationEngine {
        int length=image?256*256*3:1;
        ByteBuffer buffer=ByteBuffer.allocateDirect(length*(info.type==OnnxJavaType.FLOAT16?2:4)).order(ByteOrder.nativeOrder());
        for(int i=0;i<length;i++){
-        float value=image?((pixels[i%(256*256)]>>(16-8*(i/(256*256))))&255)/255f:(float)(30*Math.hypot(width,height)/Math.hypot(36,24)/width);
+        float value=image?((pixels[i%(256*256)]>>(16-8*(i/(256*256))))&255)/255f:(float)(focalPx/width);
         if(info.type==OnnxJavaType.FLOAT16)buffer.putShort(toHalf(value));else buffer.putFloat(value);
        }
        buffer.rewind();feeds.put(entry.getKey(),OnnxTensor.createTensor(env,buffer,image?new long[]{1,3,256,256}:new long[]{1},info.type));
@@ -86,7 +89,7 @@ final class GenerationEngine {
        activeRun=run;check();
        try(OrtSession.Result outputs=session.run(feeds,run)){
         check();phase("正在保存这段记忆…");
-        generated=MemoryWriter.write(working,photo,outputs,width,height,title);
+        generated=MemoryWriter.write(working,photo,outputs,width,height,title,focalPx);
        }finally{activeRun=null;}
       }
      }finally{for(OnnxTensor tensor:feeds.values())tensor.close();}

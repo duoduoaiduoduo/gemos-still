@@ -7,4 +7,7 @@ android {
  compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
  packaging { jniLibs { useLegacyPackaging = false } }
 }
-dependencies { implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.24.2' }
+dependencies {
+ implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.24.2'
+ testImplementation 'junit:junit:4.13.2'
+}

@@ -1,0 +1,37 @@
+name: Original SHARP Android patch probe
+on:
+  workflow_dispatch:
+  push:
+    paths: ['android/tools/ncnn/**', '.github/workflows/android-original-probe.yml']
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download verified ncnn Vulkan runtime
+        run: |
+          curl -fL --retry 2 https://github.com/Tencent/ncnn/releases/download/20260526/ncnn-20260526-android-vulkan.zip -o ncnn.zip
+          echo '26909c92eed35afed4a966b5e9e503fcb0a529691ea3f910ec2c94a4fff52804  ncnn.zip' | sha256sum --check
+          unzip -q ncnn.zip -d vendor
+      - name: Build ordinary ARM64 diagnostic executable
+        run: |
+          NDK_DIR=$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)
+          test -n "$NDK_DIR"
+          cmake -S android/tools/ncnn -B build-original-probe -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK_DIR/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-28 \
+            -DANDROID_STL=c++_static -DCMAKE_BUILD_TYPE=Release \
+            -Dncnn_DIR="$GITHUB_WORKSPACE/vendor/ncnn-20260526-android-vulkan/arm64-v8a/lib/cmake/ncnn"
+          cmake --build build-original-probe -j 2
+      - name: Include third-party license notices
+        run: |
+          curl -fL --retry 2 https://raw.githubusercontent.com/Tencent/ncnn/20260526/LICENSE.txt -o build-original-probe/LICENSE.ncnn.txt
+          curl -fL --retry 2 https://raw.githubusercontent.com/KhronosGroup/glslang/fe88f421038e1bb0a25cd5c1b2dfe505db82d08f/LICENSE.txt -o build-original-probe/LICENSE.glslang.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Gemos-original-patch-probe-arm64
+          path: |
+            build-original-probe/gemos-patch-probe
+            build-original-probe/LICENSE.*.txt
