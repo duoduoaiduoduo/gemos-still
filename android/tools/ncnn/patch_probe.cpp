@@ -109,6 +109,94 @@ static std::uint32_t input_crc32(const std::vector<float>& input) {
     return crc ^ 0xffffffffU;
 }
 
+struct ConstantSnapshot {
+    std::string name;
+    int dims, w, h, d, c;
+    size_t elements;
+    std::uint32_t crc;
+};
+
+#if NCNN_VULKAN
+static std::vector<ConstantSnapshot> snapshot_memory_constants(const ncnn::Net& net) {
+    // Public MemoryData::forward clones its existing GPU constant. Do not cast
+    // Layer to a private implementation or reload/upload any of its weights.
+    ncnn::VkBlobAllocator blob(net.vulkan_device());
+    ncnn::VkStagingAllocator staging(net.vulkan_device());
+    ncnn::Option opt = net.opt;
+    opt.blob_allocator = nullptr;
+    opt.workspace_allocator = nullptr;
+    opt.blob_vkallocator = &blob;
+    opt.workspace_vkallocator = &blob;
+    opt.staging_vkallocator = &staging;
+    opt.use_local_pool_allocator = false;
+    opt.use_packing_layout = false; // Canonical FP32 unpacked readback on this GPU.
+    std::vector<ConstantSnapshot> snapshots;
+    for (const ncnn::Layer* layer : net.layers()) {
+        if (layer->type != "MemoryData") continue;
+        if (!layer->support_vulkan || layer->featmask)
+            throw std::runtime_error("Constant snapshots require unchanged Vulkan MemoryData layers");
+        const std::vector<ncnn::VkMat> inputs;
+        std::vector<ncnn::VkMat> outputs(1);
+        ncnn::Mat host;
+        ncnn::VkCompute command(net.vulkan_device());
+        check(layer->forward(inputs, outputs, command, opt), "constant_forward");
+        if (outputs[0].empty()) throw std::runtime_error("Empty GPU constant snapshot");
+        command.record_download(outputs[0], host, opt);
+        check(command.submit_and_wait(), "constant_download");
+        if (host.empty() || host.elempack != 1 || host.elemsize != sizeof(float))
+            throw std::runtime_error("Constant snapshot must download as unpacked FP32");
+        std::uint32_t crc = 0xffffffffU;
+        const size_t plane = static_cast<size_t>(host.w) * host.h * host.d;
+        // Exclude channel alignment padding, exactly as for the tensor outputs.
+        for (int c = 0; c < host.c; ++c) {
+            const auto* bytes = reinterpret_cast<const unsigned char*>(static_cast<const float*>(host.channel(c)));
+            for (size_t j = 0; j < plane * sizeof(float); ++j) {
+                crc ^= bytes[j];
+                for (int bit = 0; bit < 8; ++bit)
+                    crc = (crc >> 1) ^ (0xedb88320U & (0U - (crc & 1U)));
+            }
+        }
+        snapshots.push_back({layer->name, host.dims, host.w, host.h, host.d, host.c,
+                             plane * host.c, crc ^ 0xffffffffU});
+    }
+    if (snapshots.empty()) throw std::runtime_error("No Vulkan MemoryData constants to snapshot");
+    return snapshots;
+}
+#endif
+
+static void write_constant_snapshots(std::ostream& report, const std::vector<ConstantSnapshot>& snapshots) {
+    report << '[';
+    for (size_t i = 0; i < snapshots.size(); ++i) {
+        if (i) report << ',';
+        const auto& s = snapshots[i];
+        report << "{\"name\":\"" << s.name << "\",\"dims\":" << s.dims << ",\"w\":" << s.w
+               << ",\"h\":" << s.h << ",\"d\":" << s.d << ",\"c\":" << s.c
+               << ",\"elements\":" << s.elements << ",\"crc32\":" << s.crc << '}';
+    }
+    report << ']';
+}
+
+static bool write_constant_comparison(std::ostream& report, const std::vector<ConstantSnapshot>& before,
+                                      const std::vector<ConstantSnapshot>& after) {
+    if (before.size() != after.size()) throw std::runtime_error("Constant snapshot count changed");
+    report << ",\"constantSnapshots\":{\"method\":\"public_forward_clone_download_fp32\",\"count\":" << before.size() << ",\"before\":";
+    write_constant_snapshots(report, before);
+    report << ",\"after\":";
+    write_constant_snapshots(report, after);
+    report << ",\"changedNames\":[";
+    bool unchanged = true;
+    for (size_t i = 0; i < before.size(); ++i) {
+        const auto& a = before[i]; const auto& b = after[i];
+        if (a.name != b.name) throw std::runtime_error("Constant snapshot order changed");
+        if (a.dims == b.dims && a.w == b.w && a.h == b.h && a.d == b.d && a.c == b.c && a.crc == b.crc) continue;
+        if (!unchanged) report << ',';
+        report << '"' << a.name << '"';
+        unchanged = false;
+    }
+    report << "],\"unchanged\":" << (unchanged ? "true" : "false") << '}';
+    return unchanged;
+}
+
 static void write_output(const std::string& prefix, const char* name,
                          const ncnn::Mat& value, size_t expected, std::ostream& report) {
     if (value.empty() || value.elempack != 1 || value.elemsize != sizeof(float))
@@ -138,7 +226,7 @@ static void write_output(const std::string& prefix, const char* name,
 
 static int probe(int argc, char** argv) {
     if (argc < 7) {
-        std::fprintf(stderr, "Usage: gemos-patch-probe PARAM BIN INPUT.f32 OUTPUT_PREFIX cpu|vulkan fp32|fp16 [--image-only|--tap-tail] [--tail-layernorm-cpu|--layernorm-cpu] [--repeat=1|2|3] [--fresh-vulkan-allocators] [--no-cpu-pool] [--fresh-net]\n");
+        std::fprintf(stderr, "Usage: gemos-patch-probe PARAM BIN INPUT.f32 OUTPUT_PREFIX cpu|vulkan fp32|fp16 [--image-only|--tap-tail] [--tail-layernorm-cpu|--layernorm-cpu] [--repeat=1|2|3] [--fresh-vulkan-allocators] [--no-cpu-pool] [--fresh-net] [--snapshot-constants|--memorydata-cpu]\n");
         return 2;
     }
     bool tapTail = false, tailLayernormCpu = false, layernormCpu = false, imageOnly = false;
@@ -146,6 +234,7 @@ static int probe(int argc, char** argv) {
     bool repeatSpecified = false;
     bool freshVulkanAllocators = false;
     bool noCpuPool = false, freshNet = false;
+    bool snapshotConstants = false, memoryDataCpu = false;
     for (int i = 7; i < argc; ++i) {
         const std::string flag = argv[i];
         if (flag == "--tap-tail") tapTail = true;
@@ -164,6 +253,14 @@ static int probe(int argc, char** argv) {
             if (freshNet) throw std::runtime_error("Fresh Net policy must be specified only once");
             freshNet = true;
         }
+        else if (flag == "--snapshot-constants") {
+            if (snapshotConstants) throw std::runtime_error("Constant snapshot policy must be specified only once");
+            snapshotConstants = true;
+        }
+        else if (flag == "--memorydata-cpu") {
+            if (memoryDataCpu) throw std::runtime_error("MemoryData CPU policy must be specified only once");
+            memoryDataCpu = true;
+        }
         else if (flag.rfind("--repeat=", 0) == 0) {
             if (repeatSpecified || (flag != "--repeat=1" && flag != "--repeat=2" && flag != "--repeat=3"))
                 throw std::runtime_error("Repeat must be specified once and be 1, 2, or 3");
@@ -180,6 +277,8 @@ static int probe(int argc, char** argv) {
     if (freshVulkanAllocators && (backend != "vulkan" || repeats < 2))
         throw std::runtime_error("Fresh Vulkan allocators require the Vulkan backend and at least two repeats");
     if (freshNet && repeats < 2) throw std::runtime_error("Fresh Net requires at least two repeats");
+    if (snapshotConstants && (backend != "vulkan" || repeats < 2 || memoryDataCpu))
+        throw std::runtime_error("Constant snapshots require Vulkan, at least two repeats, and GPU MemoryData");
     const auto began = Clock::now();
     constexpr size_t pixels = 3 * 384 * 384;
     std::vector<float> input(pixels);
@@ -193,6 +292,7 @@ static int probe(int argc, char** argv) {
     const std::uint32_t originalInputCrc = input_crc32(input);
     std::unique_ptr<ncnn::Net> net;
     int netLoads = 0;
+    size_t memoryDataCpuCount = 0;
     const auto initializeNet = [&]() {
         const auto initializationBegan = Clock::now();
         // The caller must destroy the previous complete Net first. Do not call
@@ -230,6 +330,15 @@ static int probe(int argc, char** argv) {
             // Scoped to this reviewed patch graph; do not silently change another model.
             if (selected != (layernormCpu ? 49U : 1U)) throw std::runtime_error("Unexpected original patch LayerNorm count");
         }
+        memoryDataCpuCount = 0;
+        if (memoryDataCpu) {
+            for (ncnn::Layer* layer : net->mutable_layers()) {
+                if (layer->type != "MemoryData") continue;
+                layer->support_vulkan = false;
+                ++memoryDataCpuCount;
+            }
+            if (!memoryDataCpuCount) throw std::runtime_error("No MemoryData layers selected for CPU");
+        }
         phase("load_weights", began);
         check(net->load_model(argv[2]), "load_model");
         ++netLoads;
@@ -265,6 +374,8 @@ static int probe(int argc, char** argv) {
            << ",\"freshVulkanAllocators\":" << (freshVulkanAllocators ? "true" : "false")
            << ",\"freshNetEachRun\":" << (freshNet ? "true" : "false")
            << ",\"cpuAllocatorPolicy\":\"" << (noCpuPool ? "system_malloc" : "net_pool") << '"'
+           << ",\"snapshotConstants\":" << (snapshotConstants ? "true" : "false")
+           << ",\"memoryDataCpu\":" << (memoryDataCpu ? "true" : "false") << ",\"memoryDataCpuCount\":" << memoryDataCpuCount
            << ",\"vulkanAllocatorPolicy\":\"" << (backend == "cpu" ? "not_applicable" : freshVulkanAllocators ? "fresh_per_run" : "device_pool") << "\",";
     // Capture intermediate outputs before final to avoid re-running freed trunks.
     std::vector<const char*> names;
@@ -276,6 +387,7 @@ static int probe(int argc, char** argv) {
     bool inputMutated = false;
     int completedRuns = 0;
     double totalInferenceSeconds = 0;
+    bool allConstantsUnchanged = true;
     for (int run = 0; run < repeats; ++run) {
         double netInitializeSeconds = run == 0 ? firstNetInitializeSeconds : 0;
         if (run > 0 && freshNet) {
@@ -286,6 +398,16 @@ static int probe(int argc, char** argv) {
         }
         const auto runBegan = Clock::now();
         const std::uint32_t inputCrcBefore = input_crc32(input);
+        std::vector<ConstantSnapshot> constantsBefore, constantsAfter;
+        double constantSnapshotSeconds = 0;
+#if NCNN_VULKAN
+        if (snapshotConstants) {
+            const auto snapshotBegan = Clock::now();
+            phase("constant_snapshot_before", began);
+            constantsBefore = snapshot_memory_constants(*net);
+            constantSnapshotSeconds += seconds(snapshotBegan);
+        }
+#endif
         const std::string prefix = repeats == 1 ? std::string(argv[4]) : std::string(argv[4]) + ".r" + std::to_string(run);
         if (repeats > 1) {
             if (run) report << ',';
@@ -326,6 +448,14 @@ static int probe(int argc, char** argv) {
                 phase(label.c_str(), began);
             }
         }
+#if NCNN_VULKAN
+        if (snapshotConstants) {
+            const auto snapshotBegan = Clock::now();
+            phase("constant_snapshot_after", began);
+            constantsAfter = snapshot_memory_constants(*net);
+            constantSnapshotSeconds += seconds(snapshotBegan);
+        }
+#endif
         const std::uint32_t inputCrcAfter = input_crc32(input);
         inputMutated = inputCrcBefore != originalInputCrc || inputCrcAfter != inputCrcBefore;
         ++completedRuns;
@@ -334,6 +464,11 @@ static int probe(int argc, char** argv) {
         report << "},\"inputCrc32Before\":" << inputCrcBefore << ",\"inputCrc32After\":" << inputCrcAfter
                << ",\"inputUnchanged\":" << (inputMutated ? "false" : "true")
                << ",\"netLoadIndex\":" << netLoads << ",\"netInitializeSeconds\":" << netInitializeSeconds;
+        if (snapshotConstants) {
+            const bool unchanged = write_constant_comparison(report, constantsBefore, constantsAfter);
+            allConstantsUnchanged = allConstantsUnchanged && unchanged;
+            report << ",\"constantSnapshotSeconds\":" << constantSnapshotSeconds;
+        }
         if (repeats > 1)
             report << ",\"inferenceSeconds\":" << runInferenceSeconds << ",\"peakRssBytes\":" << peak_rss_bytes() << '}';
         if (inputMutated) break;
@@ -344,6 +479,7 @@ static int probe(int argc, char** argv) {
            << ",\"netLoads\":" << netLoads << ",\"totalNetInitializeSeconds\":" << totalNetInitializeSeconds
            << ",\"elapsedSeconds\":" << completed << ",\"peakRssBytes\":" << peak_rss_bytes()
            << ",\"completedRuns\":" << completedRuns
+           << ",\"allConstantSnapshotsUnchanged\":" << (!snapshotConstants ? "null" : allConstantsUnchanged ? "true" : "false")
            << ",\"status\":\"" << (inputMutated ? "input_buffer_mutated" : "finite_outputs") << "\"}\n";
     if (!report) throw std::runtime_error("Report write failed");
     report.close();
