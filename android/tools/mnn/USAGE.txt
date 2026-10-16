@@ -23,6 +23,35 @@ without loading a model or GPU:
   ./gemos-rest-probe --stage gaussian --print-contract
 stdout is newline-delimited JSON, beginning with the diagnostic process PID.
 
+Three additional fixed research profiles split depth itself at two original
+decoder tensors, preserving every original operation and parameter:
+  depth-coarse: spn_latent1, spn_high, spn_middle, spn_low, spn_image_global
+                -> depth_decoder_features.f32 [1,256,384,384], exactly
+                150,994,944 raw FP32 bytes (144 MiB).
+  depth-refine: depth_decoder_features.f32 and original spn_latent0.f32
+                -> depth_head_features.f32 [1,128,768,768], exactly
+                301,989,888 raw FP32 bytes (288 MiB).
+  depth-fine:   only depth_head_features.f32 -> clamped_monodepth_disparity.f32
+                [1,2,1536,1536]. There are no additional skip inputs.
+Use the same explicit --model/--weights/--inputs/--output arguments and separate
+child processes. The intermediate must come from the same photo's coarse run.
+Keep spn_latent0 from the same photo for refine; it is not an input to coarse.
+The coarse->refine head tensor is bitwise equal to the previous two-part depth
+head tensor, whose unchanged fine stage already produced bitwise equal depth.
+Refine schedules the independent latent0 skip branch first. Every individual
+MNN operator's serialized content, weight offset and tensor index is unchanged;
+the validated change only reorders that topologically independent branch.
+
+These extra profiles have not established mobile fit. The original full-depth
+OpenCL session hit the unchanged 1536-MiB RSS guard during session creation.
+The three-way split removes 768px activations from coarse, but refine and fine
+still process large original features. Static FP16 activation estimates exclude
+driver/workspace/allocator costs and cannot establish mobile fit. The reordered
+refine desktop CPU run used 2033.79 MB of session memory and 2.162 GiB peak RSS;
+this is not a phone GPU memory measurement. Keep every original guard and require
+separate memory admission/numerical validation; do not treat this split as a
+successful phone run or automatically retry a guarded failure.
+
 CPU comparison uses --backend cpu. It retains the same conservative Android
 limits and is not permission to attempt the known multi-gigabyte CPU pipeline.
 
@@ -72,11 +101,18 @@ Fixed reviewed metadata/weight sizes (bytes):
   rest       9,504,520 / 93,184,376
   depth         17,656 / 78,195,976
   gaussian   9,493,192 / 55,394,416
+  depth-coarse  12,816 / 69,786,624
+  depth-refine   4,032 /  8,203,776
+  depth-fine     1,816 /    205,576
 Each model receives its explicit --weights path via setExternalFile before
 session creation. Application model-store fields are depthModel, depthWeights,
 gaussianModel, gaussianWeights; corresponding deployment basenames are exactly
 A-monodepth-fp16.mnn, A-monodepth-fp16.mnn.weight, B-gaussians-fp16.mnn and
 B-gaussians-fp16.mnn.weight. Verify the separately supplied SHA-256 manifest.
+The three-way diagnostic deployment basenames are A0-depth-coarse-fp16.mnn,
+A1-depth-refine-fp16.mnn and A2-depth-fine-fp16.mnn, each with its explicit
+matching .mnn.weight file. These are separate research profiles; the existing
+application's two-part model-store fields are not silently reinterpreted.
 
 The Android watchdog exits only this diagnostic process after 60 seconds, RSS
 above 1536 MiB, or system MemAvailable below 1024 MiB. An external host watchdog

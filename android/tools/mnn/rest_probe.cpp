@@ -50,9 +50,13 @@ static const std::map<std::string,StageSpec> kStages=[] {
     rest_inputs.insert(rest_inputs.end(),kFeatures.begin(),kFeatures.end());
     auto gaussian_inputs=rest_inputs;
     gaussian_inputs.push_back({"clamped_monodepth_disparity",{1,2,1536,1536}});
+    auto coarse_inputs=std::vector<InputSpec>(kFeatures.begin()+1,kFeatures.end());
     return std::map<std::string,StageSpec>{
         {"rest",{"rest",9504520,93184376,kGaussians,rest_inputs,kGaussianOutputs}},
         {"depth",{"depth",17656,78195976,0,kFeatures,{{"clamped_monodepth_disparity",{1,2,1536,1536}}}}},
+        {"depth-coarse",{"depth-coarse",12816,69786624,0,coarse_inputs,{{"depth_decoder_features",{1,256,384,384}}}}},
+        {"depth-refine",{"depth-refine",4032,8203776,0,{{"depth_decoder_features",{1,256,384,384}},{"spn_latent0",{1,1024,96,96}}},{{"depth_head_features",{1,128,768,768}}}}},
+        {"depth-fine",{"depth-fine",1816,205576,0,{{"depth_head_features",{1,128,768,768}}},{{"clamped_monodepth_disparity",{1,2,1536,1536}}}}},
         {"gaussian",{"gaussian",9493192,55394416,kGaussians,gaussian_inputs,kGaussianOutputs}}
     };
 }();
@@ -317,11 +321,14 @@ static int probe(int argc,char** argv) {
     for(int index=1;index<argc;++index) {
         std::string key=argv[index];
         if(key=="--help") {
-            std::cout << "gemos-rest-probe --backend cpu|opencl [--stage rest|depth|gaussian] [--capabilities-only]\n"
+            std::cout << "gemos-rest-probe --backend cpu|opencl [--stage rest|depth|gaussian|depth-coarse|depth-refine|depth-fine] [--capabilities-only]\n"
                       << "  --model FILE --weights FILE --inputs DIR --output DIR\n"
-                      << "gemos-rest-probe [--stage rest|depth|gaussian] --print-contract\n"
+                      << "gemos-rest-probe [--stage rest|depth|gaussian|depth-coarse|depth-refine|depth-fine] --print-contract\n"
                       << "Default stage: rest (8 inputs). depth: 6 features -> clamped_monodepth_disparity.f32;\n"
                       << "gaussian: image + disparity_factor + 6 features + clamped depth (9 inputs) -> 5 Gaussians.\n"
+                      << "depth-coarse: 5 features (all except latent0) -> depth_decoder_features.f32 [1,256,384,384];\n"
+                      << "depth-refine: decoder features + original spn_latent0 -> depth_head_features.f32 [1,128,768,768];\n"
+                      << "depth-fine: head features -> original clamped depth. No omitted skip inputs.\n"
                       << "All tensor files are little-endian FP32. Run depth and gaussian in separate processes.\n";return 0;
         }
         if(key=="--capabilities-only") {capabilities_only=true;continue;}
@@ -332,7 +339,7 @@ static int probe(int argc,char** argv) {
     }
     const std::string stage_name=options.count("--stage")?options["--stage"]:"rest";
     auto selected_stage=kStages.find(stage_name);
-    if(selected_stage==kStages.end()) throw std::runtime_error("Unknown stage; choose rest, depth or gaussian");
+    if(selected_stage==kStages.end()) throw std::runtime_error("Unknown stage; choose rest, depth, depth-coarse, depth-refine, depth-fine or gaussian");
     const auto& stage=selected_stage->second;
     if(print_contract) {std::cout << stage_json(stage) << std::endl;return 0;}
     const std::string backend=options["--backend"];
