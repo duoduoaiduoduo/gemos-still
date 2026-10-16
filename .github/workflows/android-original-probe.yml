@@ -1,8 +1,7 @@
 name: Original SHARP Android patch probe
 on:
   workflow_dispatch:
-  push:
-    paths: ['android/tools/ncnn/**', '.github/workflows/android-original-probe.yml']
+  workflow_call:
 permissions:
   contents: read
 jobs:
@@ -29,6 +28,8 @@ jobs:
         run: |
           curl -fL --retry 2 https://raw.githubusercontent.com/Tencent/ncnn/20260526/LICENSE.txt -o build-original-probe/LICENSE.ncnn.txt
           curl -fL --retry 2 https://raw.githubusercontent.com/KhronosGroup/glslang/fe88f421038e1bb0a25cd5c1b2dfe505db82d08f/LICENSE.txt -o build-original-probe/LICENSE.glslang.txt
+          cd build-original-probe
+          sha256sum gemos-patch-probe gemos-pyramid-probe gemos-pyramid-stitch-test > SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
           name: Gemos-original-patch-probe-arm64
@@ -37,3 +38,4 @@ jobs:
             build-original-probe/gemos-pyramid-probe
             build-original-probe/gemos-pyramid-stitch-test
             build-original-probe/LICENSE.*.txt
+            build-original-probe/SHA256SUMS.txt

@@ -1,8 +1,7 @@
 name: Original SHARP Android OpenCL rest probe
 on:
   workflow_dispatch:
-  push:
-    paths: ['android/tools/mnn/**', '.github/workflows/android-original-rest-probe.yml']
+  workflow_call:
 permissions:
   contents: read
 jobs:

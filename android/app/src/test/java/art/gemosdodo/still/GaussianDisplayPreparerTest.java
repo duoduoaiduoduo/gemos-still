@@ -77,4 +77,18 @@ public final class GaussianDisplayPreparerTest {
   assertEquals(7.5,GaussianDisplayPreparer.quantile(new float[]{0,10},.75),1e-9);
   assertEquals(1,GaussianDisplayPreparer.weightedQuantile(new float[]{0,1,2},new float[]{1,2,1},.5),1e-7);
  }
+ @Test public void analysisCancellationIsCheckedWithin4096Points()throws Exception{
+  int n=6000;float[] mean=new float[n*3],scale=new float[n*3],q=new float[n*4],color=new float[n*3],alpha=new float[n];
+  for(int i=0;i<n;i++){mean[i*3+2]=1;scale[i*3]=scale[i*3+1]=scale[i*3+2]=.01f;q[i*4]=1;alpha[i]=.8f;}
+  GaussianDisplayPreparer.Input input=new GaussianDisplayPreparer.Input(FloatBuffer.wrap(mean),FloatBuffer.wrap(scale),FloatBuffer.wrap(q),FloatBuffer.wrap(color),FloatBuffer.wrap(alpha),100,100,100);
+  final int[] checks={0};
+  try{GaussianDisplayPreparer.analyze(input,()->++checks[0]>=3);fail("Expected cancellation during the first validity pass");}catch(InterruptedIOException expected){assertEquals(3,checks[0]);}
+ }
+ @Test public void cancelledWriteDoesNotProducePartialRecords()throws Exception{
+  try(Fixture f=new Fixture("gaussian-display-synthetic-v2.bin")){
+   GaussianDisplayPreparer.Input input=f.input();GaussianDisplayPreparer.Analysis analysis=GaussianDisplayPreparer.analyze(input);ByteArrayOutputStream output=new ByteArrayOutputStream();
+   try{GaussianDisplayPreparer.write(input,analysis,257,output,()->true);fail("Expected write cancellation");}catch(InterruptedIOException expected){assertEquals(0,output.size());}
+  }
+ }
+
 }

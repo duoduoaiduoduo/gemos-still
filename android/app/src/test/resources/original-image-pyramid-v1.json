@@ -1,0 +1,162 @@
+{
+  "torch": "2.8.0",
+  "fixture": "original-image-pyramid-v1.bin",
+  "bytes": 78960,
+  "allSynthetic": true,
+  "antialias": false,
+  "cases": [
+    {
+      "name": "photo_rgb_align_true",
+      "input": [
+        1,
+        3,
+        7,
+        11
+      ],
+      "output": [
+        1,
+        3,
+        13,
+        19
+      ],
+      "alignCorners": true,
+      "argb": false
+    },
+    {
+      "name": "photo_argb_align_true",
+      "input": [
+        1,
+        3,
+        9,
+        13
+      ],
+      "output": [
+        1,
+        3,
+        17,
+        23
+      ],
+      "alignCorners": true,
+      "argb": true
+    },
+    {
+      "name": "photo1536_horizontal_precision",
+      "input": [
+        1,
+        3,
+        1,
+        11
+      ],
+      "output": [
+        1,
+        3,
+        1,
+        1536
+      ],
+      "alignCorners": true,
+      "argb": false
+    },
+    {
+      "name": "photo1536_vertical_precision",
+      "input": [
+        1,
+        3,
+        9,
+        1
+      ],
+      "output": [
+        1,
+        3,
+        1536,
+        1
+      ],
+      "alignCorners": true,
+      "argb": false
+    },
+    {
+      "name": "spn_half_direct_level0",
+      "input": [
+        1,
+        3,
+        32,
+        32
+      ],
+      "output": [
+        1,
+        3,
+        16,
+        16
+      ],
+      "alignCorners": false,
+      "argb": false
+    },
+    {
+      "name": "spn_quarter_direct_level0",
+      "input": [
+        1,
+        3,
+        32,
+        32
+      ],
+      "output": [
+        1,
+        3,
+        8,
+        8
+      ],
+      "alignCorners": false,
+      "argb": false
+    },
+    {
+      "name": "half_pixel_border_clamp",
+      "input": [
+        1,
+        3,
+        5,
+        3
+      ],
+      "output": [
+        1,
+        3,
+        13,
+        11
+      ],
+      "alignCorners": false,
+      "argb": false
+    },
+    {
+      "name": "output_one_align_true",
+      "input": [
+        1,
+        3,
+        5,
+        7
+      ],
+      "output": [
+        1,
+        3,
+        1,
+        1
+      ],
+      "alignCorners": true,
+      "argb": false
+    },
+    {
+      "name": "output_one_align_false",
+      "input": [
+        1,
+        3,
+        5,
+        7
+      ],
+      "output": [
+        1,
+        3,
+        1,
+        1
+      ],
+      "alignCorners": false,
+      "argb": false
+    }
+  ]
+}

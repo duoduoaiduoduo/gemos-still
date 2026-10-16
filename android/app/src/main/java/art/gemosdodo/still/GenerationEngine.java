@@ -11,12 +11,13 @@ import java.nio.*;
 import java.util.*;
 import java.util.concurrent.*;
 
-/** One retained, sequential CPU job. Never keeps an Activity or a renderer alive. */
+/** One retained sequential job. Native stages release GPU memory between processes. */
 final class GenerationEngine {
  interface Listener { void changed(State state); }
  static final class State {
-  final boolean running; final String message; final long bytes,total; final File result; final boolean cancelled;
-  State(boolean running,String message,long bytes,long total,File result,boolean cancelled){this.running=running;this.message=message;this.bytes=bytes;this.total=total;this.result=result;this.cancelled=cancelled;}
+  final boolean running; final String message; final long bytes,total; final File result; final boolean cancelled,original;
+  State(boolean running,String message,long bytes,long total,File result,boolean cancelled){this(running,message,bytes,total,result,cancelled,false);}
+  State(boolean running,String message,long bytes,long total,File result,boolean cancelled,boolean original){this.running=running;this.message=message;this.bytes=bytes;this.total=total;this.result=result;this.cancelled=cancelled;this.original=original;}
  }
  private final Context context;
  private final Handler main=new Handler(Looper.getMainLooper());
@@ -25,22 +26,29 @@ final class GenerationEngine {
  private volatile Listener listener;
  private volatile boolean cancelled;
  private volatile OrtSession.RunOptions activeRun;
+ private volatile OriginalGenerationEngine activeOriginal;
+ private volatile boolean originalMode;
  GenerationEngine(Context context){this.context=context.getApplicationContext();}
  State state(){return state;}
+ boolean originalAvailable(){return OriginalGenerationEngine.available(context);}
  void attach(Listener listener){this.listener=listener;listener.changed(state);}
  void detach(){listener=null;}
- private void publish(State next){state=next;main.post(()->{Listener current=listener;if(current!=null)current.changed(next);});}
+ private void publish(State next){State event=new State(next.running,next.message,next.bytes,next.total,next.result,next.cancelled,originalMode);state=event;main.post(()->{Listener current=listener;if(current!=null)current.changed(event);});}
  private void phase(String message){CrashDiagnostics.append(context,message);publish(new State(true,message,0,0,null,false));}
  private void check()throws InterruptedIOException{if(cancelled||Thread.currentThread().isInterrupted())throw new InterruptedIOException("已取消");}
  synchronized void start(File photo,int width,int height,String title){start(photo,width,height,title,CameraIntrinsics.focalPixels(CameraIntrinsics.DEFAULT_35MM,width,height));}
  synchronized void start(File photo,int width,int height,String title,double focalPx){
   if(state.running)return;
-  cancelled=false;publish(new State(true,"正在准备本机模型…",0,0,null,false));
+  OriginalGenerationEngine previous=activeOriginal;
+  if(previous!=null&&previous.hasLiveChild()){previous.cancel();publish(new State(false,"上一阶段尚未完全停止，请稍候再试。照片和模型缓存已保留。",0,0,null,false));return;}
+  activeOriginal=null;
+  cancelled=false;originalMode=originalAvailable();publish(new State(true,originalMode?"正在准备原版实验模型…":"正在准备本机模型…",0,0,null,false));
   final double calibratedFocal=CameraIntrinsics.pixelsOrDefault(focalPx,width,height);
   worker.execute(()->generate(photo,width,height,title,calibratedFocal));
  }
  void cancel(){
   cancelled=true;
+  OriginalGenerationEngine original=activeOriginal;if(original!=null)original.cancel();
   OrtSession.RunOptions run=activeRun;
   if(run!=null)try{run.setTerminate(true);}catch(Exception ignored){}
   if(state.running)publish(new State(true,"正在停止，请稍候…",0,0,null,false));
@@ -54,8 +62,14 @@ final class GenerationEngine {
   try{
    check();
    CrashDiagnostics.append(context,"Camera intrinsics: "+width+"x"+height+" focalPx="+focalPx+" disparity="+(focalPx/width));
+   if(!working.mkdirs())throw new IOException("无法准备临时存储空间");
+   if(originalMode){
+    OriginalGenerationEngine original=new OriginalGenerationEngine(context,()->cancelled,message->{if(!cancelled)phase(message);});
+    activeOriginal=original;
+    try{generated=original.generate(photo,working,width,height,title,focalPx);}finally{if(!original.hasLiveChild())activeOriginal=null;}
+   }else{
    ModelStore.ensure(context,(message,bytes,total)->{if(!cancelled)publish(new State(true,message,bytes,total,null,false));},()->cancelled);
-   check();if(!working.mkdirs())throw new IOException("无法准备临时存储空间");
+   check();
    phase("正在载入轻量模型…");
    OrtEnvironment env=OrtEnvironment.getEnvironment();
    try(OrtSession.SessionOptions options=new OrtSession.SessionOptions()){
@@ -89,11 +103,12 @@ final class GenerationEngine {
        activeRun=run;check();
        try(OrtSession.Result outputs=session.run(feeds,run)){
         check();phase("正在保存这段记忆…");
-        generated=MemoryWriter.write(working,photo,outputs,width,height,title,focalPx);
+        generated=MemoryWriter.write(working,photo,outputs,width,height,title,focalPx,()->cancelled);
        }finally{activeRun=null;}
       }
      }finally{for(OnnxTensor tensor:feeds.values())tensor.close();}
     }
+   }
    }
    // Session and all native tensors are closed before the renderer loads the result.
    check();File destination=new File(context.getFilesDir(),"last-memory.still");
@@ -108,7 +123,7 @@ final class GenerationEngine {
    String message=stopped?"已停止生成。照片仍保存在本机。":"本次没有完成："+friendly(error);
    publish(new State(false,message,0,0,null,stopped));
   }finally{
-   activeRun=null;sampling.cancel(false);monitor.shutdown();delete(working);
+   activeRun=null;OriginalGenerationEngine original=activeOriginal;if(original!=null)original.cancel();if(original==null||!original.hasLiveChild())activeOriginal=null;sampling.cancel(false);monitor.shutdown();delete(working);
    new File(context.getFilesDir(),"last-memory.still.part").delete();
   }
  }

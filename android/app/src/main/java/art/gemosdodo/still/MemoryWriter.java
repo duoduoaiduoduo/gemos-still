@@ -3,22 +3,48 @@ import ai.onnxruntime.*;
 import java.io.*;
 import java.nio.*;
 import java.util.*;
+import java.util.function.BooleanSupplier;
 import org.json.JSONObject;
 
 final class MemoryWriter {
  static FloatBuffer values(OrtSession.Result out,String name)throws Exception{return ((OnnxTensor)out.get(name).orElseThrow()).getFloatBuffer();}
  static File write(File dir,File photo,OrtSession.Result result,int width,int height)throws Exception{return write(dir,photo,result,width,height,"一刻记忆");}
  static File write(File dir,File photo,OrtSession.Result result,int width,int height,String title)throws Exception{return write(dir,photo,result,width,height,title,CameraIntrinsics.focalPixels(CameraIntrinsics.DEFAULT_35MM,width,height));}
- static File write(File dir,File photo,OrtSession.Result result,int width,int height,String title,double focalPx)throws Exception{
+ static File write(File dir,File photo,OrtSession.Result result,int width,int height,String title,double focalPx)throws Exception{return write(dir,photo,result,width,height,title,focalPx,null);}
+ static File write(File dir,File photo,OrtSession.Result result,int width,int height,String title,double focalPx,BooleanSupplier cancelled)throws Exception{
   FloatBuffer mean=values(result,"mean_vectors_ndc"),scale=values(result,"singular_values_ndc"),quat=values(result,"quaternions_ndc"),color=values(result,"colors"),alpha=values(result,"opacities");int n=alpha.remaining();
   if(mean.remaining()!=n*3||scale.remaining()!=n*3||quat.remaining()!=n*4||color.remaining()!=n*3)throw new IOException("模型输出形状不匹配");
+  return writeBuffers(dir,photo,mean,scale,quat,color,alpha,width,height,title,focalPx,false,cancelled);
+ }
+ static File writeNative(File dir,File photo,File rawOutputDir,int width,int height,String title,double focalPx)throws Exception{return writeNative(dir,photo,rawOutputDir,width,height,title,focalPx,null);}
+ static File writeNative(File dir,File photo,File rawOutputDir,int width,int height,String title,double focalPx,BooleanSupplier cancelled)throws Exception{
+  check(cancelled);
+  // The original pipeline must expose every Gaussian, never a lightweight result
+  // renamed as the original. READ_ONLY maps avoid five additional large arrays.
+  final int count=1179648;
+  FloatBuffer mean=map(rawOutputDir,"mean_vectors_ndc",count*3),scale=map(rawOutputDir,"singular_values_ndc",count*3);
+  FloatBuffer quat=map(rawOutputDir,"quaternions_ndc",count*4),color=map(rawOutputDir,"colors",count*3),alpha=map(rawOutputDir,"opacities",count);
+  return writeBuffers(dir,photo,mean,scale,quat,color,alpha,width,height,title,focalPx,true,cancelled);
+ }
+ private static FloatBuffer map(File dir,String name,int floats)throws IOException{
+  File source=new File(dir,name+".f32");long bytes=(long)floats*4;
+  if(!source.isFile()||source.length()!=bytes)throw new IOException("原版模型输出不完整："+name);
+  try(RandomAccessFile file=new RandomAccessFile(source,"r")){
+   return file.getChannel().map(java.nio.channels.FileChannel.MapMode.READ_ONLY,0,bytes).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
+  }
+ }
+ private static File writeBuffers(File dir,File photo,FloatBuffer mean,FloatBuffer scale,FloatBuffer quat,FloatBuffer color,FloatBuffer alpha,int width,int height,String title,double focalPx,boolean original,BooleanSupplier cancelled)throws Exception{
+  check(cancelled);
   double focal=CameraIntrinsics.pixelsOrDefault(focalPx,width,height);
   GaussianDisplayPreparer.Input input=new GaussianDisplayPreparer.Input(mean,scale,quat,color,alpha,width,height,focal);
-  GaussianDisplayPreparer.Analysis analysis=GaussianDisplayPreparer.analyze(input);
+  GaussianDisplayPreparer.Analysis analysis=GaussianDisplayPreparer.analyze(input,cancelled);
   File model=new File(dir,"model.memorygs");int written;
-  try(OutputStream stream=new BufferedOutputStream(new FileOutputStream(model))){written=GaussianDisplayPreparer.write(input,analysis,250000,stream);}
-  if(written<100)throw new IOException("有效粒子不足");JSONObject meta=new JSONObject();meta.put("name",MemoryFile.displayTitle(title));meta.put("created_at",new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX",Locale.US).format(new Date()));meta.put("settings",new JSONObject().put("designVersion",2).put("contentScale",.65).put("depthVolume",1));meta.put("photoType","image/jpeg");meta.put("photoBytes",photo.length());meta.put("modelBytes",model.length());byte[] json=meta.toString().getBytes("UTF-8");File output=new File(dir,"generated-memory.still.part");
-  try(OutputStream out=new BufferedOutputStream(new FileOutputStream(output))){out.write(ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN).putInt(0x4c4c5453).putInt(1).putInt(json.length).array());out.write(json);for(File f:new File[]{photo,model})try(InputStream in=new FileInputStream(f)){byte[] buf=new byte[65536];int read;while((read=in.read(buf))!=-1)out.write(buf,0,read);}}
-  return output;
+  try(OutputStream stream=new BufferedOutputStream(new FileOutputStream(model))){written=GaussianDisplayPreparer.write(input,analysis,250000,stream,cancelled);}
+  check(cancelled);if(written<100)throw new IOException("有效粒子不足");JSONObject meta=new JSONObject();meta.put("name",MemoryFile.displayTitle(title));if(original)meta.put("generationModel","sharp-original-1536-rnd");meta.put("created_at",new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX",Locale.US).format(new Date()));meta.put("settings",new JSONObject().put("designVersion",2).put("contentScale",.65).put("depthVolume",1));meta.put("photoType","image/jpeg");meta.put("photoBytes",photo.length());meta.put("modelBytes",model.length());byte[] json=meta.toString().getBytes("UTF-8");File output=new File(dir,"generated-memory.still.part");
+  try(OutputStream out=new BufferedOutputStream(new FileOutputStream(output))){out.write(ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN).putInt(0x4c4c5453).putInt(1).putInt(json.length).array());out.write(json);for(File f:new File[]{photo,model})try(InputStream in=new FileInputStream(f)){byte[] buf=new byte[65536];int read;while((read=in.read(buf))!=-1){check(cancelled);out.write(buf,0,read);}}}
+  check(cancelled);return output;
+ }
+ private static void check(BooleanSupplier cancelled)throws InterruptedIOException{
+  if(Thread.currentThread().isInterrupted()||(cancelled!=null&&cancelled.getAsBoolean()))throw new InterruptedIOException("已取消");
  }
 }

@@ -7,7 +7,7 @@ import org.json.JSONObject;
 
 /** Bounded STLL reader; never decodes the full-resolution photo just to view 3D. */
 final class MemoryFile {
- static final int MAX_PARTICLES=100000;
+ static final int MAX_PARTICLES=250000;
  static final long MAX_BYTES=150L*1024*1024;
  static final class Content {
   final String title;
@@ -35,7 +35,7 @@ final class MemoryFile {
     if(!finite)throw new IOException("记忆中存在无法显示的粒子数据");
     if(records[offset+3]<0||records[offset+3]>1.001f)throw new IOException("记忆透明度数据异常");
     if(records[offset+4]<0||records[offset+7]<0||records[offset+9]<0)throw new IOException("记忆空间数据异常");
-    written++;next=(int)((long)written*total/limit);
+    written++;next=written<limit?sampleIndex(written,total,limit):total;
    }
    if(written<100)throw new IOException("记忆中的有效粒子不足");
    return new Content(displayTitle(meta.optString("name","一刻记忆")),records);
@@ -49,6 +49,11 @@ final class MemoryFile {
    FloatBuffer source=ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();float[] records=new float[source.remaining()];source.get(records);
    return new Content("站内人潮 · 示例",records);
   }
+ }
+ /** Uniform budget sampling includes both endpoints, without a prefix bias. */
+ static int sampleIndex(int index,int total,int limit){
+  if(total<1||limit<1||limit>total||index<0||index>=limit)throw new IllegalArgumentException("Invalid display sampling bounds");
+  return limit==1?0:(int)((long)index*(total-1)/(limit-1));
  }
  static String displayTitle(String name) {
   if(name==null)return "一刻记忆";
