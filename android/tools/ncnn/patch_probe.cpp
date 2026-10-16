@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <fcntl.h>
 #include <iomanip>
 #include <map>
 #include <mutex>
@@ -53,8 +54,12 @@ public:
             else if (rss > 1536L * 1024) reason = "process_rss_1536MiB";
             else if (available >= 0 && available < 1024L * 1024) reason = "available_below_1024MiB";
             if (reason) {
-                std::fprintf(stderr, "{\"guardStopped\":\"%s\",\"rssKiB\":%ld,\"availableKiB\":%ld}\n", reason, rss, available);
-                std::fflush(nullptr);
+                char diagnostic[256];
+                const int length = std::snprintf(diagnostic, sizeof(diagnostic), "{\"guardStopped\":\"%s\",\"rssKiB\":%ld,\"availableKiB\":%ld}\n", reason, rss, available);
+                const int flags = fcntl(STDERR_FILENO, F_GETFL);
+                if (flags >= 0) fcntl(STDERR_FILENO, F_SETFL, flags | O_NONBLOCK);
+                if (length > 0 && static_cast<size_t>(length) < sizeof(diagnostic))
+                    (void)!write(STDERR_FILENO, diagnostic, static_cast<size_t>(length));
                 std::_Exit(124); // The OS releases only this diagnostic's resources.
             }
         }

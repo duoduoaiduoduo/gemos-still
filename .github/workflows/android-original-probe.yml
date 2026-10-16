@@ -34,4 +34,6 @@ jobs:
           name: Gemos-original-patch-probe-arm64
           path: |
             build-original-probe/gemos-patch-probe
+            build-original-probe/gemos-pyramid-probe
+            build-original-probe/gemos-pyramid-stitch-test
             build-original-probe/LICENSE.*.txt
