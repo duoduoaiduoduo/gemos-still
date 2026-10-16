@@ -18,12 +18,15 @@ final class OriginalModelStore {
  private static final String DIRECTORY="original-model-v1",PREFERENCES="original-model-validation-v1";
 
  static final class Models {
-  final File patchParam,patchWeights,imageParam,imageWeights,depthModel,depthWeights,gaussianModel,gaussianWeights;
+  final File patchParam,patchWeights,imageParam,imageWeights,depthCoarseModel,depthCoarseWeights,
+    depthRefineModel,depthRefineWeights,depthFineModel,depthFineWeights,gaussianModel,gaussianWeights;
   Models(File directory){
    patchParam=new File(directory,ARTIFACTS[0].name);patchWeights=new File(directory,ARTIFACTS[1].name);
    imageParam=new File(directory,ARTIFACTS[2].name);imageWeights=new File(directory,ARTIFACTS[3].name);
-   depthModel=new File(directory,ARTIFACTS[4].name);depthWeights=new File(directory,ARTIFACTS[5].name);
-   gaussianModel=new File(directory,ARTIFACTS[6].name);gaussianWeights=new File(directory,ARTIFACTS[7].name);
+   depthCoarseModel=new File(directory,ARTIFACTS[4].name);depthCoarseWeights=new File(directory,ARTIFACTS[5].name);
+   depthRefineModel=new File(directory,ARTIFACTS[6].name);depthRefineWeights=new File(directory,ARTIFACTS[7].name);
+   depthFineModel=new File(directory,ARTIFACTS[8].name);depthFineWeights=new File(directory,ARTIFACTS[9].name);
+   gaussianModel=new File(directory,ARTIFACTS[10].name);gaussianWeights=new File(directory,ARTIFACTS[11].name);
   }
  }
  static final class Artifact {
@@ -39,12 +42,17 @@ final class OriginalModelStore {
   new Artifact("patch_encoder_fp16.ncnn.bin",608965380,"26bd6abc3fbfb2e4accf6627c570ad19e5005255ace4652962711f5a5001f977"),
   new Artifact("image_encoder_fp16.ncnn.param",46380,"33c54448782b7f46a9a7aae3944400c8f9d2e3fff7d8c2a162afba8fa3c9656e"),
   new Artifact("image_encoder_fp16.ncnn.bin",608965380,"d734a3800f0d81ec7dfd83808f2190c246100eefa629dbba5774c78031e98258"),
-  new Artifact("A-monodepth-fp16.mnn",17656,"6908e3e04fe8e0024a32d54a46cd4286855156c263abb01d07661289e0fb7a21"),
-  new Artifact("A-monodepth-fp16.mnn.weight",78195976,"c418408e0365ec0404ec83d5ebe39c56fd1a418209a11b3b2ac21d30a7cd8aa2"),
+  new Artifact("A0-depth-coarse-fp16.mnn",12816,"7518e4f0eb1dd6336fed266dbb306957a1af1e3aef0346266e3e05c729a690c0"),
+  new Artifact("A0-depth-coarse-fp16.mnn.weight",69786624,"12d68e050711dd1c63a9ca11765cc23e947b6ba43a0166903b29e749a3a53de7"),
+  new Artifact("A1-depth-refine-fp16.mnn",4032,"e6423d898f1c4a03d79cde7ac767b061895e21b47aec7aeb978b0262adcc8e3e"),
+  new Artifact("A1-depth-refine-fp16.mnn.weight",8203776,"2e4d5df522488ccbda778b1818d71105e4109dd8d9f89967561f68b4fa58a4a0"),
+  new Artifact("A2-depth-fine-fp16.mnn",1816,"7ba903170ffcfdb75b4fec0b78812b6103225b58549de2096ee8d40fd48f4f92"),
+  new Artifact("A2-depth-fine-fp16.mnn.weight",205576,"e69ccc3d5e3a8e33b674ebc13e2b6a1629c40e272afc9fe97e5c41af0bd39988"),
   new Artifact("B-gaussians-fp16.mnn",9493192,"9b974946041a6a0952566c7e31491554378d0bccd3ee0086178bd254552472bf"),
   new Artifact("B-gaussians-fp16.mnn.weight",55394416,"5b10c8dc3a8eb53c8f856b2cbc5bc750d8f5d88fb80407675d713b6d068a8552")
  };
  private static final String MANIFEST_DIGEST=fingerprint(ARTIFACTS);
+ static Artifact[] requiredArtifacts(){return ARTIFACTS.clone();}
 
  /** Fast candidate check only. Newly provisioned files still need ensure(). */
  static boolean hasFiles(Context context){return hasFiles(new File(context.getFilesDir(),DIRECTORY),ARTIFACTS);}

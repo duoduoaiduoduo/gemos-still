@@ -21,6 +21,7 @@ import org.json.JSONObject;
  */
 final class OriginalGenerationEngine {
  interface Listener { void phase(String message); }
+ interface DepthRunner { void run(String stage,File model,File weights,File inputs,File output)throws Exception; }
  private static final long MIB=1024L*1024;
  private static final String PYRAMID="libgemos-pyramid-probe.so",PATCH="libgemos-patch-probe.so",REST="libgemos-rest-probe.so";
  private final Context context;
@@ -47,7 +48,7 @@ final class OriginalGenerationEngine {
  File generate(File photo,File working,int width,int height,String title,double focalPx)throws Exception{
   if(!available(context))throw new IOException("原版实验资源尚未就绪，请保留缓存后重试");
   check();admit();
-  if(working.getUsableSpace()<512*MIB)throw new IOException("原版实验需要至少 512 MB 临时存储空间");
+  String storage=storageReason(working.getUsableSpace());if(storage!=null)throw new IOException(storage);
   ScheduledExecutorService guard=Executors.newSingleThreadScheduledExecutor();
   ScheduledFuture<?> watching=guard.scheduleAtFixedRate(()->{
    try{String reason=unsafe(false);if(reason!=null&&stopReason==null){stopReason=reason;CrashDiagnostics.append(context,"Original guard: "+reason);cancel();}}
@@ -72,12 +73,15 @@ final class OriginalGenerationEngine {
    // image encoder is loaded. Its 49 original LayerNorm operators stay on CPU.
    phase("原版分析 · 正在理解整张照片…");
    File imagePrefix=new File(working,"image-global");
-   run("image",65000,working,PATCH,models.imageParam,models.imageWeights,pyramid.normalized384,imagePrefix,"vulkan","fp16","--image-only","--layernorm-cpu");
+   run("image",65000,working,PATCH,models.imageParam,models.imageWeights,pyramid.normalized384,imagePrefix,"vulkan","fp16","--image-only","--layernorm-cpu","--memorydata-cpu");
    move(new File(imagePrefix.getPath()+".out0.f32"),new File(inputs,"spn_image_global.f32"));require(new File(inputs,"spn_image_global.f32"),1024L*24*24*4);
-   phase("原版重建 · 正在计算空间深度…");
-   File depth=new File(working,"depth");mkdir(depth);
-   run("depth",65000,working,REST,"--backend","opencl","--stage","depth","--model",models.depthModel,"--weights",models.depthWeights,"--inputs",inputs,"--output",depth);
-   File disparity=new File(depth,"clamped_monodepth_disparity.f32");require(disparity,2L*1536*1536*4);move(disparity,new File(inputs,disparity.getName()));
+   // Both encoders have exited. These three owned tensors are no longer inputs
+   // to any remaining stage; retain the original RGB and every SPN feature.
+   discard(pyramid.normalized1536);discard(pyramid.normalized768);discard(pyramid.normalized384);
+   rebuildDepth(models,working,inputs,(stage,model,weights,sharedInputs,output)->{
+    phase(depthPhase(stage));
+    run(stage,65000,working,REST,"--backend","opencl","--stage",stage,"--model",model,"--weights",weights,"--inputs",sharedInputs,"--output",output);
+   },()->cancelled.getAsBoolean()||stopReason!=null);
    phase("原版重建 · 正在构建 3D 记忆…");
    File gaussian=new File(working,"gaussian");mkdir(gaussian);
    run("gaussian",65000,working,REST,"--backend","opencl","--stage","gaussian","--model",models.gaussianModel,"--weights",models.gaussianWeights,"--inputs",inputs,"--output",gaussian);
@@ -143,7 +147,40 @@ final class OriginalGenerationEngine {
   }
  }
 
- private static String stageName(String name){switch(name){case "pyramid":return "照片分析";case "image":return "整体分析";case "depth":return "深度计算";default:return "空间重建";}}
+ private static String stageName(String name){switch(name){case "pyramid":return "照片分析";case "image":return "整体分析";case "depth-coarse":return "空间深度分析";case "depth-refine":return "深度细节重建";case "depth-fine":return "深度精修";default:return "空间重建";}}
+ private static String depthPhase(String name){switch(name){case "depth-coarse":return "原版重建 · 正在分析空间深度（1 / 3）…";case "depth-refine":return "原版重建 · 正在恢复深度细节（2 / 3）…";default:return "原版重建 · 正在精修空间深度（3 / 3）…";}}
+ /** Inputs stay in one private directory. The native runner binds only the
+  * named inputs for its stage; latent0 and all other SPN features must survive
+  * until the Gaussian stage, while large decoder/head tensors are temporary. */
+ static File rebuildDepth(OriginalModelStore.Models models,File working,File inputs,DepthRunner runner,BooleanSupplier cancelled)throws Exception{
+  OriginalModelStore.check(cancelled);
+  File coarse=new File(working,"depth-coarse");mkdir(coarse);
+  runner.run("depth-coarse",models.depthCoarseModel,models.depthCoarseWeights,inputs,coarse);
+  OriginalModelStore.check(cancelled);
+  File decoder=new File(inputs,"depth_decoder_features.f32");
+  acceptOutput(new File(coarse,decoder.getName()),decoder,256L*384*384*4);
+  File refine=new File(working,"depth-refine");mkdir(refine);
+  OriginalModelStore.check(cancelled);
+  runner.run("depth-refine",models.depthRefineModel,models.depthRefineWeights,inputs,refine);
+  OriginalModelStore.check(cancelled);
+  File head=new File(inputs,"depth_head_features.f32");
+  acceptOutput(new File(refine,head.getName()),head,128L*768*768*4);
+  discard(decoder);
+  File fine=new File(working,"depth-fine");mkdir(fine);
+  OriginalModelStore.check(cancelled);
+  runner.run("depth-fine",models.depthFineModel,models.depthFineWeights,inputs,fine);
+  OriginalModelStore.check(cancelled);
+  File disparity=new File(inputs,"clamped_monodepth_disparity.f32");
+  acceptOutput(new File(fine,disparity.getName()),disparity,2L*1536*1536*4);
+  discard(head);
+  return disparity;
+ }
+ static String storageReason(long usable){return usable<1024*MIB?"原版实验需要至少 1 GB 临时存储空间。请腾出空间后重试，照片和模型缓存已保留。":null;}
+ private static void acceptOutput(File from,File to,long bytes)throws IOException{
+  require(from,bytes);
+  if(!from.renameTo(to))throw new IOException("无法准备原版阶段数据："+to.getName());
+ }
+ private static void discard(File file)throws IOException{if(file.exists()&&!file.delete())throw new IOException("无法释放原版实验临时空间："+file.getName());}
  private void admit()throws IOException{String reason=unsafe(true);if(reason!=null)throw new IOException(reason);}
  private String unsafe(boolean entering){
   if(cancelled.getAsBoolean())return null;
