@@ -3,18 +3,21 @@
 #include <net.h>
 #include <layer.h>
 #if NCNN_VULKAN
+#include <allocator.h>
 #include <gpu.h>
 #endif
 #include <array>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <fcntl.h>
 #include <iomanip>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -95,6 +98,17 @@ static size_t peak_rss_bytes() {
 #endif
 }
 
+static std::uint32_t input_crc32(const std::vector<float>& input) {
+    std::uint32_t crc = 0xffffffffU;
+    const auto* bytes = reinterpret_cast<const unsigned char*>(input.data());
+    for (size_t i = 0; i < input.size() * sizeof(float); ++i) {
+        crc ^= bytes[i];
+        for (int bit = 0; bit < 8; ++bit)
+            crc = (crc >> 1) ^ (0xedb88320U & (0U - (crc & 1U)));
+    }
+    return crc ^ 0xffffffffU;
+}
+
 static void write_output(const std::string& prefix, const char* name,
                          const ncnn::Mat& value, size_t expected, std::ostream& report) {
     if (value.empty() || value.elempack != 1 || value.elemsize != sizeof(float))
@@ -124,18 +138,23 @@ static void write_output(const std::string& prefix, const char* name,
 
 static int probe(int argc, char** argv) {
     if (argc < 7) {
-        std::fprintf(stderr, "Usage: gemos-patch-probe PARAM BIN INPUT.f32 OUTPUT_PREFIX cpu|vulkan fp32|fp16 [--image-only|--tap-tail] [--tail-layernorm-cpu|--layernorm-cpu] [--repeat=1|2|3]\n");
+        std::fprintf(stderr, "Usage: gemos-patch-probe PARAM BIN INPUT.f32 OUTPUT_PREFIX cpu|vulkan fp32|fp16 [--image-only|--tap-tail] [--tail-layernorm-cpu|--layernorm-cpu] [--repeat=1|2|3] [--fresh-vulkan-allocators]\n");
         return 2;
     }
     bool tapTail = false, tailLayernormCpu = false, layernormCpu = false, imageOnly = false;
     int repeats = 1;
     bool repeatSpecified = false;
+    bool freshVulkanAllocators = false;
     for (int i = 7; i < argc; ++i) {
         const std::string flag = argv[i];
         if (flag == "--tap-tail") tapTail = true;
         else if (flag == "--tail-layernorm-cpu") tailLayernormCpu = true;
         else if (flag == "--layernorm-cpu") layernormCpu = true;
         else if (flag == "--image-only") imageOnly = true;
+        else if (flag == "--fresh-vulkan-allocators") {
+            if (freshVulkanAllocators) throw std::runtime_error("Fresh Vulkan allocators must be specified only once");
+            freshVulkanAllocators = true;
+        }
         else if (flag.rfind("--repeat=", 0) == 0) {
             if (repeatSpecified || (flag != "--repeat=1" && flag != "--repeat=2" && flag != "--repeat=3"))
                 throw std::runtime_error("Repeat must be specified once and be 1, 2, or 3");
@@ -149,6 +168,8 @@ static int probe(int argc, char** argv) {
     const std::string backend = argv[5], precision = argv[6];
     if (backend != "cpu" && backend != "vulkan") throw std::runtime_error("Unknown backend");
     if (precision != "fp32" && precision != "fp16") throw std::runtime_error("Unknown precision");
+    if (freshVulkanAllocators && (backend != "vulkan" || repeats < 2))
+        throw std::runtime_error("Fresh Vulkan allocators require the Vulkan backend and at least two repeats");
     const auto began = Clock::now();
     constexpr size_t pixels = 3 * 384 * 384;
     std::vector<float> input(pixels);
@@ -159,6 +180,7 @@ static int probe(int argc, char** argv) {
     if (!image.read(reinterpret_cast<char*>(input.data()), pixels * sizeof(float)))
         throw std::runtime_error("Input read failed");
     for (float value : input) if (!std::isfinite(value)) throw std::runtime_error("Nonfinite input");
+    const std::uint32_t originalInputCrc = input_crc32(input);
     phase("create_backend", began);
     ncnn::Net net;
     net.opt.num_threads = 2;
@@ -216,7 +238,9 @@ static int probe(int argc, char** argv) {
            << ",\"imageEncoderOnly\":" << (imageOnly ? "true" : "false")
            << ",\"precisionStorageRequested\":\"" << precision
            << "\",\"fp16Arithmetic\":false,\"cpuThreads\":2,\"runs\":" << repeats
-           << ",\"inputShape\":[1,3,384,384],";
+           << ",\"inputShape\":[1,3,384,384],\"inputCrc32Initial\":" << originalInputCrc
+           << ",\"freshVulkanAllocators\":" << (freshVulkanAllocators ? "true" : "false")
+           << ",\"vulkanAllocatorPolicy\":\"" << (backend == "cpu" ? "not_applicable" : freshVulkanAllocators ? "fresh_per_run" : "device_pool") << "\",";
     // Capture intermediate outputs before final to avoid re-running freed trunks.
     std::vector<const char*> names;
     if (!imageOnly) names = {"out1", "out2"};
@@ -224,8 +248,11 @@ static int probe(int argc, char** argv) {
     names.push_back("out0");
     if (repeats > 1)
         report << "\"repeatInputPolicy\":\"single_immutable_host_buffer_new_extractor_each_run\",\"iterations\":[";
+    bool inputMutated = false;
+    int completedRuns = 0;
     for (int run = 0; run < repeats; ++run) {
         const auto runBegan = Clock::now();
+        const std::uint32_t inputCrcBefore = input_crc32(input);
         const std::string prefix = repeats == 1 ? std::string(argv[4]) : std::string(argv[4]) + ".r" + std::to_string(run);
         if (repeats > 1) {
             if (run) report << ',';
@@ -236,7 +263,24 @@ static int probe(int argc, char** argv) {
         // with every host result consumed before destruction. The input vector is
         // deliberately neither replaced nor written between diagnostic rounds.
         {
+#if NCNN_VULKAN
+            // Allocators are declared before the Extractor, so exception unwinding
+            // and ordinary scope exit destroy every tensor before its allocator.
+            std::unique_ptr<ncnn::VkBlobAllocator> freshBlob;
+            std::unique_ptr<ncnn::VkStagingAllocator> freshStaging;
+            if (freshVulkanAllocators) {
+                freshBlob.reset(new ncnn::VkBlobAllocator(net.vulkan_device()));
+                freshStaging.reset(new ncnn::VkStagingAllocator(net.vulkan_device()));
+            }
+#endif
             ncnn::Extractor extractor = net.create_extractor();
+#if NCNN_VULKAN
+            if (freshVulkanAllocators) {
+                extractor.set_blob_vkallocator(freshBlob.get());
+                extractor.set_workspace_vkallocator(freshBlob.get());
+                extractor.set_staging_vkallocator(freshStaging.get());
+            }
+#endif
             check(extractor.input("in0", ncnn::Mat(384, 384, 3, input.data())), "input");
             for (size_t i = 0; i < names.size(); ++i) {
                 ncnn::Mat output;
@@ -249,16 +293,24 @@ static int probe(int argc, char** argv) {
                 phase(label.c_str(), began);
             }
         }
-        report << '}';
+        const std::uint32_t inputCrcAfter = input_crc32(input);
+        inputMutated = inputCrcBefore != originalInputCrc || inputCrcAfter != inputCrcBefore;
+        ++completedRuns;
+        report << "},\"inputCrc32Before\":" << inputCrcBefore << ",\"inputCrc32After\":" << inputCrcAfter
+               << ",\"inputUnchanged\":" << (inputMutated ? "false" : "true");
         if (repeats > 1)
             report << ",\"inferenceSeconds\":" << seconds(runBegan) << ",\"peakRssBytes\":" << peak_rss_bytes() << '}';
+        if (inputMutated) break;
     }
     if (repeats > 1) report << ']';
     const double completed = seconds(began);
     report << ",\"initializeSeconds\":" << initialized << ",\"inferenceSeconds\":" << completed - initialized
            << ",\"elapsedSeconds\":" << completed << ",\"peakRssBytes\":" << peak_rss_bytes()
-           << ",\"status\":\"finite_outputs\"}\n";
+           << ",\"completedRuns\":" << completedRuns
+           << ",\"status\":\"" << (inputMutated ? "input_buffer_mutated" : "finite_outputs") << "\"}\n";
     if (!report) throw std::runtime_error("Report write failed");
+    report.close();
+    if (inputMutated) throw std::runtime_error("Inference modified the immutable host input buffer; see recorded before/after CRC32");
     phase("complete", began);
     return 0;
 }
